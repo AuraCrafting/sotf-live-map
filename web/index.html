@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101412">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>SOTF Live Map</title>
+<link rel="icon" href="icons/gps-locator.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Saira+Condensed:wght@500;600;700&family=Source+Sans+3:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="vendor/leaflet.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar" aria-label="Map filters">
+    <header class="brand">
+      <div class="brand-mark" aria-hidden="true"><img src="icons/gps-locator.webp" alt=""></div>
+      <div>
+        <h1>Live Map</h1>
+        <p>Sons of the Forest</p>
+      </div>
+      <button class="icon-btn close-drawer" id="close-drawer" aria-label="Close menu">&times;</button>
+    </header>
+
+
+    <div class="search">
+      <label for="search" class="sr-only">Search the map</label>
+      <input id="search" type="search" placeholder="Search: shotgun, keycard, cave…" autocomplete="off">
+      <ul id="search-results" hidden></ul>
+    </div>
+
+    <section class="update" id="update" aria-label="Update" aria-live="polite" hidden></section>
+
+    <section class="summary" id="summary" aria-label="Progress"></section>
+    <section class="unlock" id="unlock" aria-label="To unlock" hidden></section>
+
+    <div class="filter-bar">
+      <button class="text-btn" id="show-all">Show all</button>
+      <button class="text-btn" id="hide-all">Hide all</button>
+      <label class="switch"><input type="checkbox" id="hide-found"><span>Hide found</span></label>
+    </div>
+
+    <nav id="categories"></nav>
+
+    <section class="mine">
+      <h2>Your map</h2>
+      <label class="world-pick" hidden><span>World</span><select id="world-pick" aria-label="World to show"></select></label>
+      <label class="switch"><input type="checkbox" id="show-trail" checked><span>Show where I've been</span></label>
+      <label class="switch"><input type="checkbox" id="auto-mark" checked><span>Auto-mark places I visit</span></label>
+      <div id="pin-list"></div>
+      <div class="mine-actions">
+        <button class="text-btn" id="phone-btn">Open on phone</button>
+        <button class="text-btn danger" id="clear-trail">Reset trail</button>
+      </div>
+    </section>
+
+    <section class="about" id="about" aria-label="About this map">
+      <p class="about-line"><span id="app-version">SOTF Live Map</span> <span id="update-checked"></span></p>
+      <label class="switch" id="update-switch" hidden><input type="checkbox" id="update-check"><span>Check for updates</span></label>
+      <p class="about-note" id="update-note" hidden></p>
+    </section>
+
+    <footer class="credits">
+      Map tiles, icons and locations from the open-source
+      <a href="https://github.com/lmachens/sons-of-the-forest-map" target="_blank" rel="noopener">Sons of the Forest map</a>
+      by Leon Machens (MIT). Layout inspired by Map Genie.
+    </footer>
+  </aside>
+  <div id="scrim" hidden></div>
+
+  <main id="map" aria-label="Island map"></main>
+
+  <div class="topbar">
+    <button class="fab" id="menu-btn" aria-label="Open filters">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+    <button class="status" id="status" aria-label="Your position">
+      <span class="dot"></span><span id="status-text">Looking for your save…</span>
+    </button>
+    <button class="mode-slider" id="mode-switch" role="switch" aria-checked="false" aria-label="Map mode: Explore">
+      <span class="ms-peek ms-peek-explore" aria-hidden="true"><span class="t">Explore</span><span class="ms-chev">&lsaquo;</span></span>
+      <span class="ms-peek ms-peek-guide" aria-hidden="true"><span class="ms-chev">&rsaquo;</span><span class="t">Guide</span></span>
+      <span class="ms-knob" aria-hidden="true"><span class="ms-icon"></span><span class="ms-label">Explore</span></span>
+    </button>
+    <div class="guide-chip" id="guide-chip" hidden>
+      <button class="guide-go" id="guide-text" title="Show the target"></button>
+      <button class="guide-stop" id="guide-stop" aria-label="Stop guiding" title="Stop guiding">&times;</button>
+    </div>
+  </div>
+
+  <div class="cave-banner" id="cave-banner" hidden>
+    <div><strong id="cave-name"></strong><span id="cave-count"></span></div>
+    <button class="text-btn" id="cave-exit">Back to island</button>
+  </div>
+
+  <div class="controls" aria-label="Map controls">
+    <button class="fab" id="zoom-in" aria-label="Zoom in"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+    <button class="fab" id="zoom-out" aria-label="Zoom out"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+    <button class="fab" id="locate" aria-label="Center on me" title="Center on me"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></button>
+    <button class="fab" id="follow" aria-pressed="false" aria-label="Follow me" title="Keep me centered"><svg viewBox="0 0 24 24"><path d="M12 3l7 18-7-4-7 4z"/></svg></button>
+    <button class="fab" id="trail-btn" aria-expanded="false" aria-controls="trail-menu" aria-label="Your trail" title="Your trail"><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h7a3 3 0 000-6H9a3 3 0 010-6h7"/></svg></button>
+    <button class="fab" id="dark-map" aria-pressed="true" aria-label="Dark map" title="Dark map"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/></svg></button>
+    <button class="fab" id="add-pin" aria-pressed="false" aria-label="Add a pin" title="Add a pin (or right-click / long-press the map)"><svg viewBox="0 0 24 24"><path d="M12 22s7-7.2 7-12a7 7 0 10-14 0c0 4.8 7 12 7 12z"/><path d="M12 7v6M9 10h6"/></svg></button>
+  </div>
+
+  <div class="trail-menu" id="trail-menu" role="dialog" aria-label="Your trail" hidden>
+    <h3>Your trail</h3>
+    <div class="seg" role="radiogroup" aria-label="Show">
+      <button role="radio" data-range="hour">Last hour</button>
+      <button role="radio" data-range="today">Today</button>
+      <button role="radio" data-range="all">All</button>
+    </div>
+    <label class="switch"><input type="checkbox" id="trail-show"><span>Show trail</span></label>
+    <label class="switch"><input type="checkbox" id="explored-show"><span>Show where you've been</span></label>
+    <p class="trail-count" id="trail-count"></p>
+    <div class="trail-reset" id="trail-reset"></div>
+  </div>
+
+  <div class="draft-bar" id="draft-bar" role="dialog" aria-label="New pin" hidden>
+    <p class="draft-hint" id="draft-hint"></p>
+    <p class="draft-where" id="draft-where"></p>
+    <div class="kinds" id="draft-kinds" role="group" aria-label="Pin type"></div>
+    <div class="draft-actions">
+      <button class="primary" data-draft="place">Place pin</button>
+      <button class="secondary" data-draft="cancel">Cancel</button>
+    </div>
+  </div>
+
+  <div class="readout" id="readout" aria-hidden="true"></div>
+
+  <section id="detail" class="card" hidden aria-live="polite"></section>
+
+  <div id="phone-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="phone-title">
+    <div class="modal-box">
+      <h2 id="phone-title">Open on your phone</h2>
+      <p>Connect your phone to the same Wi-Fi as this PC, then scan the code with the camera.</p>
+      <div id="qr"></div>
+      <p class="mono" id="phone-url"></p>
+      <p class="hint">On the phone, use "Add to Home Screen" to open it like an app. If it won't load, allow SOTF Live Map.exe through Windows Firewall when Windows asks (or in Windows Security, Firewall, Allow an app).</p>
+      <button class="primary" id="phone-close">Done</button>
+    </div>
+  </div>
+
+  <div id="shot-view" class="shot-view" hidden><img alt=""></div>
+
+  <div class="mode-sheet" id="mode-sheet" role="dialog" aria-label="Switch to Guide" hidden></div>
+
+  <div id="toast" role="status" hidden></div>
+</div>
+<script src="vendor/leaflet.js"></script>
+<script src="vendor/qrcode.min.js"></script>
+<script src="data/locations.js"></script>
+<script src="data/underground.js"></script>
+<script src="data/items.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

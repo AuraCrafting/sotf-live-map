@@ -1,0 +1,29 @@
+# build output
+bin/
+obj/
+dist/
+__pycache__/
+*.pyc
+
+# Claude Code session settings (hold paths on the author's PC)
+.claude/
+
+# personal data: never commit
+progress.json
+progress.*.json
+*.bak
+
+# large files generated from the game by tools/ (re-create with the commands in tools/build_data.py)
+tools/objects.json
+tools/audit.json
+
+# old versions kept on the author's PC
+mod-source/
+sotf-map/
+sotf-livemap-mod/
+server.py
+Start Map.bat
+README.txt
+
+# backups and logs from upgrades on this PC
+backups/

@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>SOTFLiveMap</AssemblyName>
+    <RootNamespace>LiveMap</RootNamespace>
+    <Version>3.2.0</Version>
+    <DebugType>none</DebugType>
+    <CheckEolTargetFramework>false</CheckEolTargetFramework>
+    <!-- Building needs the game with MelonLoader (run once) for the generated Il2Cpp assemblies.
+         build\release.ps1 finds the game through Steam; or pass -p:GameDir=... or set SOTF_GAME_DIR. -->
+    <GameDir Condition="'$(GameDir)' == ''">$(SOTF_GAME_DIR)</GameDir>
+    <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Sons Of The Forest</GameDir>
+    <MelonDir>$(GameDir)\MelonLoader</MelonDir>
+    <Il2Cpp>$(MelonDir)\Il2CppAssemblies</Il2Cpp>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="MelonLoader"><HintPath>$(MelonDir)\net6\MelonLoader.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(MelonDir)\net6\0Harmony.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.Common"><HintPath>$(MelonDir)\net6\Il2CppInterop.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.Runtime"><HintPath>$(MelonDir)\net6\Il2CppInterop.Runtime.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2Cppmscorlib"><HintPath>$(Il2Cpp)\Il2Cppmscorlib.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(Il2Cpp)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppSons"><HintPath>$(Il2Cpp)\Il2CppSons.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppSons.Ai.Vail"><HintPath>$(Il2Cpp)\Il2CppSons.Ai.Vail.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppSons.Areas"><HintPath>$(Il2Cpp)\Il2CppSons.Areas.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppEndnight"><HintPath>$(Il2Cpp)\Il2CppEndnight.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2Cppbolt"><HintPath>$(Il2Cpp)\Il2Cppbolt.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2Cppbolt.user"><HintPath>$(Il2Cpp)\Il2Cppbolt.user.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppSons.Gameplay.GameSetup"><HintPath>$(Il2Cpp)\Il2CppSons.Gameplay.GameSetup.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppSons.Save"><HintPath>$(Il2Cpp)\Il2CppSons.Save.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(Il2Cpp)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(Il2Cpp)\UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(Il2Cpp)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppTheForest.Utils"><HintPath>$(Il2Cpp)\Il2CppTheForest.Utils.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+
+</Project>
