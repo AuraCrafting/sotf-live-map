@@ -1,0 +1,71 @@
+name: Nexus Mods
+
+# When a GitHub release is published (build\publish.ps1 -Publish), upload its zip to the SOTF Live Map
+# page on Nexus Mods as a new version of the main file, with the "What's new" lines as the changelog.
+#
+# Needs, under Settings > Secrets and variables > Actions on GitHub:
+#   secret   NEXUSMODS_API_KEY  personal API key from https://www.nexusmods.com/settings/api-keys
+#   variable NEXUSMODS_FILE_ID  the main file's ID (Nexus: Files tab, the file's menu, "API Info")
+#   variable NEXUSMODS_MOD_ID   the mod's ID, for the changelog (leave it out to upload without one)
+# Until NEXUSMODS_FILE_ID is set the job is skipped. The Nexus API can't create the mod page or its first
+# file: those are made once on the website.
+#
+# To upload a release again (or one made before this workflow): Actions > Nexus Mods > Run workflow.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to upload, e.g. v3.3.0
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-upload
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    if: vars.NEXUSMODS_FILE_ID != '' && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the release zip and notes
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          version="${TAG#v}"
+          zip="SOTF-Live-Map-$version.zip"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$zip"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > notes.md
+          # the bullets under "## What's new" (publish.ps1 writes them), without the "- "
+          awk '/^## /{on = ($0 ~ /^## What.s new/); next} on && /^- /{sub(/^- /, ""); print}' notes.md > changelog.txt
+          {
+            echo "version=$version"
+            echo "zip=$zip"
+            echo "changelog<<END_OF_CHANGELOG"
+            cat changelog.txt
+            echo "END_OF_CHANGELOG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Nexus Mods
+        uses: Nexus-Mods/upload-action@98532f7670c27cbecc78fae03fa3e278147827e2 # v1.0.0-beta.11
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ vars.NEXUSMODS_FILE_ID }}
+          filename: ${{ steps.release.outputs.zip }}
+          version: ${{ steps.release.outputs.version }}
+          display_name: SOTF Live Map ${{ steps.release.outputs.version }}
+          description: Unzip anywhere and double-click Install.bat. Updating over an earlier version keeps your progress.
+          # the previous version moves to Old files; the page shows the new version number
+          archive_existing_version: true
+          update_mod_version: true
+          # Install.bat sets it up; a mod manager would unpack the zip into the game folder as it is
+          allow_mod_manager_download: false
+          mod_id: ${{ vars.NEXUSMODS_MOD_ID }}
+          changelog: ${{ vars.NEXUSMODS_MOD_ID != '' && steps.release.outputs.changelog || '' }}

@@ -13,6 +13,7 @@
   4. Commits the version change ("SOTF Live Map <version>") and tags it v<version>.
   5. Only with -Publish: pushes the commit and the tag to origin and runs gh release create (GitHub CLI) with
      the zip, its .sha256 and the notes, on the repo in UpdateRepo (LiveMap.App.csproj), the one the map checks.
+     The release then starts .github\workflows\nexus.yml, which uploads the same zip to the Nexus Mods page.
 
   It builds on this PC on purpose: the mod compiles against the Il2Cpp assemblies MelonLoader generates from your
   copy of the game, which a CI server doesn't have. Needs a clean working tree (commit your changes first).
