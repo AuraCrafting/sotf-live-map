@@ -9,7 +9,7 @@ using MelonLoader;
 using MelonLoader.Utils;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(LiveMapMod), "SOTF Live Map", "3.2.0", "AuraCrafting")]
+[assembly: MelonInfo(typeof(LiveMapMod), "SOTF Live Map", "3.3.0", "AuraCrafting")]
 [assembly: MelonGame("Endnight", "SonsOfTheForest")]
 [assembly: HarmonyDontPatchAll]
 

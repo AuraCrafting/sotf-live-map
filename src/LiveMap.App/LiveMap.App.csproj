@@ -10,7 +10,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>SOTF Live Map</AssemblyName>
     <RootNamespace>LiveMap</RootNamespace>
-    <Version>3.2.0</Version>
+    <Version>3.3.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <DebugType>none</DebugType>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
