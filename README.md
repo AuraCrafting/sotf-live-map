@@ -92,7 +92,7 @@ Your progress is kept unless you choose to delete it. The game's own files are n
   to be sure, earn an achievement you don't have yet with the mod loaded and check that it unlocks.
 - **Local only.** Your progress, position and saves stay on your PC and home network: the map talks to
   `localhost` and your phone. It makes one request of its own to the internet: the update check, a GET of
-  `https://api.github.com/repos/<owner>/<repo>/releases/latest` when it starts and every 6 hours. That
+  `https://api.github.com/repos/AuraCrafting/sotf-live-map/releases/latest` when it starts and every 6 hours. That
   sends nothing about you or your game (GitHub sees your IP address, as with any website). Switch it off
   with **Check for updates** at the bottom of the map menu, or `CheckForUpdates = false` under `[LiveMap]`.
   Other downloads: the release zip when you press **Update**, MelonLoader during install, and the files
@@ -128,7 +128,7 @@ Your progress is kept unless you choose to delete it. The game's own files are n
 
 ## Building from source
 
-The source is at `https://github.com/<owner>/sotf-live-map`. You need the .NET SDK 6 or newer, and the game
+The source is at https://github.com/AuraCrafting/sotf-live-map. You need the .NET SDK 6 or newer, and the game
 with MelonLoader started once (the mod compiles against the assemblies MelonLoader generates).
 
 ```

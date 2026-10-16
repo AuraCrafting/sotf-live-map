@@ -15,7 +15,7 @@
     <DebugType>none</DebugType>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <!-- GitHub repo ("owner/name") the map checks for new releases (Updates.cs). Empty: it never checks. -->
-    <UpdateRepo></UpdateRepo>
+    <UpdateRepo>AuraCrafting/sotf-live-map</UpdateRepo>
   </PropertyGroup>
 
   <ItemGroup>

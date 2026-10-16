@@ -1,15 +1,14 @@
 # Nexus Mods page (draft)
 
 Text for the SOTF Live Map page on Nexus Mods. Nexus descriptions use BBCode, so the long description is below
-as BBCode, ready to paste. Replace `<owner>/<repo>` with the GitHub repo and `<author>` with the name to
-publish under before posting.
+as BBCode, ready to paste.
 
 ## Fields
 
 - **Mod name:** SOTF Live Map
 - **Category:** Utilities (or Maps, if offered)
 - **Version:** the release version, e.g. 3.3.0 (the same zip as the GitHub release)
-- **Author:** `<author>`
+- **Author:** AuraCrafting
 - **Language:** English
 - **Adult content:** no
 - **Summary** (the short text under the title, max. 350 characters):
@@ -72,11 +71,11 @@ Double-click [b]Uninstall.bat[/b]. It removes the mod and the map, and MelonLoad
 [*][b]Achievements are not affected, as far as we know.[/b] The mod changes nothing in the game: no Harmony patches, no console commands or cheats, no game settings, nothing written to your saves, nothing sent over the co-op network. It only reads positions and draws the guide arrow as an overlay. We can't prove it from outside the game, so if you want to be sure, earn an achievement you don't have yet with the mod loaded and check that it unlocks.
 [*][b]No cheat switch.[/b] It uses MelonLoader on purpose. RedLoader switches on the game's console-cheat flag; if the installer finds RedLoader, it moves it to a backup folder (it asks first).
 [*][b]Local.[/b] Your progress and position stay on your PC and home network. The map makes one request of its own to the internet: an update check with GitHub at start and every 6 hours, which sends nothing about you or your game. Switch it off in the map menu ([i]Check for updates[/i]) or with [i]CheckForUpdates = false[/i] under [i][LiveMap][/i] in [i]UserData\MelonPreferences.cfg[/i].
-[*][b]Open source:[/b] [url=https://github.com/<owner>/<repo>]github.com/<owner>/<repo>[/url] (MIT).
+[*][b]Open source:[/b] [url=https://github.com/AuraCrafting/sotf-live-map]github.com/AuraCrafting/sotf-live-map[/url] (MIT).
 [/list]
 
 [size=4][b]Problems?[/b][/size]
-Check [i]MelonLoader\Latest.log[/i] for "SOTF Live Map". If the mod isn't listed, run Install.bat again. Report bugs in the Bugs tab here or on [url=https://github.com/<owner>/<repo>/issues]GitHub[/url], with that log.
+Check [i]MelonLoader\Latest.log[/i] for "SOTF Live Map". If the mod isn't listed, run Install.bat again. Report bugs in the Bugs tab here or on [url=https://github.com/AuraCrafting/sotf-live-map/issues]GitHub[/url], with that log.
 
 [size=4][b]Credits[/b][/size]
 [list]
