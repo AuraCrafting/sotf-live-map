@@ -54,6 +54,10 @@ public sealed class UndergroundArea
     public string Id;
     public double Cell, X0, Z0, X1, Z1;
     public float[] X, Z, Y;
+    /// <summary>Which outline this is: 1 from the game's objects, 2 from a cave's floor meshes (tools/cave_floors.py).</summary>
+    public int Version = 1;
+    /// <summary>The outline this one replaced (underground-v1.js), to carry explored cells over: x, z, height each.</summary>
+    public float[][] Before;
     private readonly Dictionary<(int, int), List<int>> _at = new();
 
     public int Count => X.Length;
@@ -77,6 +81,7 @@ public sealed class UndergroundArea
                     Id = a["id"]?.ToString(), Cell = MapServer.TryNum(a["cell"], out var c) && c > 0 ? c : 2,
                     X0 = Num(b[0]), Z0 = Num(b[1]), X1 = Num(b[2]), Z1 = Num(b[3]),
                     X = new float[cells.Count], Z = new float[cells.Count], Y = new float[cells.Count],
+                    Version = MapServer.TryNum(a["v"], out var ver) && ver >= 1 ? (int)ver : 1,
                 };
                 for (var k = 0; k < cells.Count; k++)
                 {
@@ -94,6 +99,21 @@ public sealed class UndergroundArea
         catch (Exception)
         {
             // no outlines: caves and bunkers just have no fog
+        }
+        try
+        {
+            // the outlines newer ones replaced (cave_floors.py), next to it: { "<area>": [[x, z, height], ...] }
+            const string prefix = "window.SOTF_UNDERGROUND_V1 = ";
+            var before = Path.Combine(Path.GetDirectoryName(path) ?? ".", "underground-v1.js");
+            var line = File.Exists(before) ? File.ReadLines(before).FirstOrDefault(l => l.StartsWith(prefix, StringComparison.Ordinal)) : null;
+            if (line != null && JsonNode.Parse(line[prefix.Length..].TrimEnd().TrimEnd(';')) is JsonObject old)
+                foreach (var area in list.Where(a => a.Version > 1))
+                    if (old[area.Id] is JsonArray cells)
+                        area.Before = cells.Select(cell => new[] { (float)Num(cell?[0]), (float)Num(cell?[1]), (float)Num(cell?[2]) }).ToArray();
+        }
+        catch (Exception)
+        {
+            // without it, what you explored in a cave with a new outline starts over
         }
         return list;
     }

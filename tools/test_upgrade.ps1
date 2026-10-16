@@ -330,6 +330,30 @@ try {
     Check 'Reset everything clears the island and the caves' (-not (Bit (Under) 5) -and (Cells (World (Invoke-RestMethod "$Base/api/state") 'world-u').explored) -eq 0)
     Stop-Map
 
+    Write-Host "`n17b. A cave with a new outline (its real floor) keeps what you explored of the old one"
+    $ugFile = Join-Path $App 'web\data\underground.js'
+    $ugBefore = Get-Content $ugFile -Raw
+    # the new outline: the corridor at z = -1450 again, and a passage beside it at z = -1448 (cell 2 i and 2 i + 1)
+    $newCells = (@(0..50 | ForEach-Object { "[$(-1500 + 2 * $_),-1450,10],[$(-1500 + 2 * $_),-1448,10]" })) -join ','
+    Set-Content $ugFile -Encoding utf8 -Value @('// test data',
+        "window.SOTF_UNDERGROUND = [{`"id`":`"cave-t`",`"name`":`"Test cave`",`"kind`":`"cave`",`"cell`":2.0,`"v`":2,`"bounds`":[-1500,-1450,-1400,-1448],`"y`":[10,10],`"cells`":[$newCells]}];")
+    Set-Content (Join-Path $App 'web\data\underground-v1.js') -Encoding utf8 -Value @('// test data', "window.SOTF_UNDERGROUND_V1 = {`"cave-t`":[$cells]};")
+    $old = New-Object byte[] 13; $old[0] = 32 # old cell 5: (-1490, -1450) on the lower floor
+    $data = Join-Path $T 'data17b'
+    Set-Json "$data\progress.json" ('{"worlds":{"world-u":{"found":[],"pins":[],"explored":{"v":4,"upTo":0,"bits":"' + [Convert]::ToBase64String((New-Object byte[] 20000)) +
+        '","under":{"cave-t":"' + [Convert]::ToBase64String($old) + '"}}}},"seenSaves":[],"trail":[]}')
+    $s = Start-Map $data $us
+    $u = (World $s 'world-u').exploredUnder.'cave-t'
+    Check 'what you explored is carried over to the new cells around it (10 m)' ((Bit $u 10) -and (Bit $u 11) -and (Bit $u 18) -and -not (Bit $u 24) -and -not (Bit $u 25))
+    Stop-Map
+    Check '... and saved for the new outline' ((Read-Json "$data\progress.json").worlds.'world-u'.explored.underV.'cave-t' -eq 2)
+    $s = Start-Map $data $us
+    $u = (World $s 'world-u').exploredUnder.'cave-t'
+    Check '... once: a restart keeps it as it is' ((Bit $u 10) -and (Bit $u 11) -and -not (Bit $u 24))
+    Stop-Map
+    Set-Content $ugFile -Encoding utf8 -NoNewline -Value $ugBefore
+    Remove-Item (Join-Path $App 'web\data\underground-v1.js')
+
     Write-Host "`n18. Where the world started, and the way between the places of one stretch"
     Set-Content (Join-Path $App 'web\data\locations.js') -Encoding utf8 -Value @('// test data', 'window.SOTF_CATEGORIES = [];',
         'window.SOTF_LOCATIONS = [{"id":2,"c":"spawn","t":"Ocean Crash Site","x":500,"y":500}];')

@@ -4,6 +4,8 @@ Steps (run from this folder, Python 3, standard library only):
   1. python -I unity_scene.py "<game>/SonsOfTheForest_Data" all.json objects.json      (all.json = ["re:."])
   2. python -I audit.py upstream_locations.json objects.json audit.json
   3. python -I build_data.py ../web/data/locations.js objects.json audit.json
+  4. python -I cave_floors.py "<game>/SonsOfTheForest_Data" ../web/data/underground.js
+     (the caves' real floors from their asset bundles, in place of the outlines step 3 makes for them)
 
 Step 3 fixes positions that the game contradicts, sets "In a cave"/"In a bunker" from where the item
 really is, drops the teleport-command tips, marks entries that couldn't be found in the game files,

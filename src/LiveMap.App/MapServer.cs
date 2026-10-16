@@ -94,6 +94,7 @@ public sealed class MapServer
         Directory.CreateDirectory(Path.GetDirectoryName(_progressPath)!);
         LoadProgress();
         ImportEarlierProgress();
+        CarryCaveFog();
         _saves.Scan(initial: true);
         _saves.Start();
         new Thread(AcceptLoop) { IsBackground = true, Name = "LiveMap.Accept" }.Start();
@@ -330,7 +331,12 @@ public sealed class MapServer
             if (_explored.TryGetValue(world, out var grid))
                 ExploredNode(world)["bits"] = grid.ToBase64();
             if (_under.ContainsKey(world))
+            {
                 ExploredNode(world)["under"] = UnderNode(world);
+                // which outline the bits are for, where it isn't the first (see CarryOver)
+                ExploredNode(world)["underV"] = new JsonObject(Areas().Where(a => a.Version > 1)
+                    .Select(a => KeyValuePair.Create(a.Id, (JsonNode)a.Version)));
+            }
         }
         _exploredDirty.Clear();
         var tmp = _progressPath + ".tmp";
@@ -606,7 +612,15 @@ public sealed class MapServer
         var node = ExploredNode(world);
         var saved = node["under"] as JsonObject;
         foreach (var a in Areas())
-            sets[a.Id] = saved?[a.Id]?.ToString() is { } bits ? CellSet.FromBase64(bits, a.Count) : new CellSet(a.Count);
+        {
+            var bits = saved?[a.Id]?.ToString();
+            var was = TryNum(node["underV"]?[a.Id], out var v) ? (int)v : 1; // the outline those bits are for
+            sets[a.Id] = bits == null ? new CellSet(a.Count)
+                : was == a.Version ? CellSet.FromBase64(bits, a.Count)
+                : CarryOver(a, bits);
+            if (bits != null && was != a.Version)
+                _exploredDirty.Add(world);
+        }
         if (saved != null)
             return sets;
         node["under"] = new JsonObject(); // made now; the bits go in when progress is saved
@@ -624,6 +638,46 @@ public sealed class MapServer
                 RevealFoundUnder(world, place, null);
         _exploredDirty.Add(world);
         return sets;
+    }
+
+    // an explored old cell clears the new ones this close: the old cells were sparse (one where the game had an
+    // object), and you were within SeeUnder of each one you'd explored
+    private const double CarryReach = 10, CarryClimb = 6;
+
+    /// <summary>At start: caves whose outline is newer than the one a world's explored cells are for get them
+    /// carried over now (see CarryOver), and saved, so it happens once.</summary>
+    private void CarryCaveFog()
+    {
+        if (_saveBlocked || _state["worlds"] is not JsonObject worlds)
+            return;
+        var newer = Areas().Where(a => a.Version > 1).ToList();
+        var carried = false;
+        foreach (var (world, p) in worlds.ToList())
+            if (p?["explored"]?["under"] is JsonObject under
+                && newer.Any(a => under[a.Id] != null && (!TryNum(p["explored"]["underV"]?[a.Id], out var v) || (int)v != a.Version)))
+            {
+                Under(world);
+                carried = true;
+            }
+        if (carried)
+            SaveProgress();
+    }
+
+    /// <summary>
+    /// A cave got a new outline (its real floor, see tools/cave_floors.py): what you'd explored of the old one
+    /// clears the new cells around those old cells. Without the old outline it starts fogged.
+    /// </summary>
+    private static CellSet CarryOver(UndergroundArea a, string bits)
+    {
+        var now = new CellSet(a.Count);
+        if (a.Before == null)
+            return now;
+        var old = CellSet.FromBase64(bits, a.Before.Length);
+        for (var k = 0; k < a.Before.Length; k++)
+            if (old.Has(k))
+                foreach (var n in a.Near(a.Before[k][0], a.Before[k][1], a.Before[k][2], CarryReach, CarryClimb))
+                    now.Set(n);
+        return now;
     }
 
     /// <summary>Marks the outline cells within SeeUnder of a spot (and UnderClimb of its height, when known) as seen.</summary>
@@ -1100,8 +1154,9 @@ public sealed class MapServer
 
     /// <summary>
     /// The lists Explore mode keeps per world, next to found and pins: "encountered" (locked spots you've been
-    /// near, so they show as locks), "revealed" (locations you chose to see, or your in-game GPS shows),
-    /// "seen" (vehicles you came near), "probable" (where an item you carry most likely came from) and
+    /// near, so they show as locks), "revealed" (locations you chose to see), "seen" (vehicles and underground
+    /// spots without a cave outline that you came near, and -1: you've met Virginia), "probable" (where an
+    /// item you carry most likely came from) and
     /// "dismissed" (such guesses you said no to).
     /// {world, kind, ids, on (default true)}.
     /// </summary>
