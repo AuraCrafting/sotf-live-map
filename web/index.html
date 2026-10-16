@@ -34,6 +34,7 @@
     <section class="update" id="update" aria-label="Update" aria-live="polite" hidden></section>
 
     <section class="summary" id="summary" aria-label="Progress"></section>
+    <p class="explored-stat" id="explored-stat" hidden></p>
     <section class="unlock" id="unlock" aria-label="To unlock" hidden></section>
 
     <div class="filter-bar">
@@ -58,6 +59,7 @@
 
     <section class="about" id="about" aria-label="About this map">
       <p class="about-line"><span id="app-version">SOTF Live Map</span> <span id="update-checked"></span></p>
+      <button class="text-btn" id="welcome-again">Show welcome again</button>
       <label class="switch" id="update-switch" hidden><input type="checkbox" id="update-check"><span>Check for updates</span></label>
       <p class="about-note" id="update-note" hidden></p>
     </section>
@@ -93,6 +95,10 @@
   <div class="cave-banner" id="cave-banner" hidden>
     <div><strong id="cave-name"></strong><span id="cave-count"></span></div>
     <button class="text-btn" id="cave-exit">Back to island</button>
+    <div class="floor-chips" id="cave-floors" role="group" aria-label="Floors" hidden></div>
+  </div>
+  <div class="cave-legend" id="cave-legend" aria-hidden="true">
+    <b>N&nbsp;↑</b><span class="scale"><i></i><em>10 m</em></span>
   </div>
 
   <div class="controls" aria-label="Map controls">
@@ -101,6 +107,7 @@
     <button class="fab" id="locate" aria-label="Center on me" title="Center on me"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></button>
     <button class="fab" id="follow" aria-pressed="false" aria-label="Follow me" title="Keep me centered"><svg viewBox="0 0 24 24"><path d="M12 3l7 18-7-4-7 4z"/></svg></button>
     <button class="fab" id="trail-btn" aria-expanded="false" aria-controls="trail-menu" aria-label="Your trail" title="Your trail"><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h7a3 3 0 000-6H9a3 3 0 010-6h7"/></svg></button>
+    <button class="fab" id="fog-btn" aria-pressed="true" aria-controls="fog-menu" aria-label="Fog over what you haven't explored"><svg viewBox="0 0 24 24"><path d="M3 9h12a3 3 0 10-3-3"/><path d="M3 13h18"/><path d="M5 17h10a3 3 0 11-3 3"/><path class="off-slash" d="M4 3l16 18"/></svg></button>
     <button class="fab" id="dark-map" aria-pressed="true" aria-label="Dark map" title="Dark map"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/></svg></button>
     <button class="fab" id="add-pin" aria-pressed="false" aria-label="Add a pin" title="Add a pin (or right-click / long-press the map)"><svg viewBox="0 0 24 24"><path d="M12 22s7-7.2 7-12a7 7 0 10-14 0c0 4.8 7 12 7 12z"/><path d="M12 7v6M9 10h6"/></svg></button>
   </div>
@@ -116,6 +123,14 @@
     <label class="switch"><input type="checkbox" id="explored-show"><span>Show where you've been</span></label>
     <p class="trail-count" id="trail-count"></p>
     <div class="trail-reset" id="trail-reset"></div>
+  </div>
+
+  <div class="trail-menu fog-menu" id="fog-menu" role="dialog" aria-label="Fog" hidden>
+    <h3>Fog</h3>
+    <label class="fog-slider" for="fog-range"><span>How thick</span><output id="fog-value" for="fog-range"></output></label>
+    <input type="range" id="fog-range" min="10" max="100" step="5" aria-label="Fog: how thick">
+    <p class="trail-count" id="fog-note"></p>
+    <div class="trail-reset" id="fog-reset"></div>
   </div>
 
   <div class="draft-bar" id="draft-bar" role="dialog" aria-label="New pin" hidden>
@@ -147,12 +162,18 @@
 
   <div class="mode-sheet" id="mode-sheet" role="dialog" aria-label="Switch to Guide" hidden></div>
 
+  <div class="welcome" id="welcome" hidden>
+    <div class="welcome-card" id="welcome-card" role="dialog" aria-labelledby="welcome-title"></div>
+  </div>
+  <div class="coach" id="coach" hidden></div>
+
   <div id="toast" role="status" hidden></div>
 </div>
 <script src="vendor/leaflet.js"></script>
 <script src="vendor/qrcode.min.js"></script>
 <script src="data/locations.js"></script>
 <script src="data/underground.js"></script>
+<script src="caves.js"></script>
 <script src="data/items.js"></script>
 <script src="app.js"></script>
 </body>

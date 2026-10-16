@@ -25,10 +25,15 @@
 
   // ---------- per-device preferences ----------
   const PREFS_KEY = 'sotf-live-map-prefs';
+  const storedPrefs = readJSON(PREFS_KEY);
+  const firstVisit = !Object.keys(storedPrefs).length; // nothing saved on this device yet: the welcome shows
   const prefs = Object.assign(
-    { hidden: CATS.filter((c) => !c.visible).map((c) => c.key), hideFound: false, showTrail: true, showExplored: true, trailRange: 'today', autoMark: true, autoMarkedUpTo: 0, darkMap: true, mode: 'explore', guideNoWarn: false },
-    readJSON(PREFS_KEY)
+    { hidden: CATS.filter((c) => !c.visible).map((c) => c.key), hideFound: false, showTrail: true, showExplored: false, fog: 35, fogOn: { explore: true, guide: false }, trailRange: 'today', autoMark: true, autoMarkedUpTo: 0, darkMap: true, mode: 'explore', guideNoWarn: false },
+    storedPrefs
   );
+  // The fog as of 3.2: on or off per mode with the Fog button (on in Explore, off in Guide), starting thin;
+  // the pale "where you've been" wash is off unless you turn it on in the trail menu.
+  if ((prefs.fogV || 0) < 2) Object.assign(prefs, { fog: 35, fogOn: { explore: true, guide: false }, showExplored: false, fogV: 2 });
   const hidden = new Set(prefs.hidden);
   function savePrefs() {
     prefs.hidden = [...hidden];
@@ -53,9 +58,13 @@
   const LOCAL_KEY = 'sotf-live-map-progress';
   const store = { found: new Set(), pins: [], trail: [], position: null, info: null, online: false, world: null,
     worlds: new Map(), active: null, view: null, viewPinned: false, target: null,
-    encountered: new Set(), revealed: new Set(), seen: new Set(), probable: new Set(), dismissed: new Set() }; // see "Explore and Guide" below
+    encountered: new Set(), revealed: new Set(), seen: new Set(), probable: new Set(), dismissed: new Set(),
+    explored: new Map(), exploredUnder: new Map() }; // world -> its explored cells, and per cave (see "fog" below) // see "Explore and Guide" below
   const MARK_LISTS = ['encountered', 'revealed', 'seen', 'probable', 'dismissed'];
   let cave = null; // the cave or bunker being shown instead of the island, or null
+  let onFoundChange = null; // the welcome's count of what your saves marked, while it's open
+  let welcomeStep = 0; // the welcome's step on screen (0: closed)
+  let heldToast = null; // a message that came while the welcome was open: shown when it closes
 
   async function api(path, body) {
     const res = await fetch('/api/' + path, body === undefined ? { cache: 'no-store' } : {
@@ -359,6 +368,7 @@
     el.classList.toggle('locked', state === 'locked');
     el.classList.toggle('unlocked', state === 'open');
     el.classList.toggle('probable', store.probable.has(id) && !store.found.has(id));
+    el.classList.toggle('other-floor', otherFloor(l));
     // in Explore a locked spot you've seen shows a lock, not what's behind it
     const look = hiddenLock(l) ? state : 'item';
     const dot = el.querySelector('.pin-dot');
@@ -494,6 +504,9 @@
     persist('pins', { action: 'save', pin });
   }
   draftBar.addEventListener('click', (e) => {
+    // Not on to the map: Place and Cancel move this bar out of the pin's popup, after which Leaflet would take
+    // the click for one on the map, and start a new pin there.
+    e.stopPropagation();
     const kind = e.target.closest('[data-draft-kind]');
     if (kind && draft) { draft.kind = kind.dataset.draftKind; return renderDraft(); }
     const act = e.target.closest('[data-draft]')?.dataset.draft;
@@ -593,6 +606,7 @@
       meGlide.go({ x: pos.x, y: pos.y, h: pos.heading }, { live: pos.source === 'live' });
     }
     updateCave();
+    autoCaveFloor();
     noteEncounters();
     drawOthers();
     drawGuide();
@@ -850,11 +864,244 @@
       }).addTo(exploredLayer);
     }
   }
+  // ---------- fog (Explore): the part of the island you haven't explored ----------
+  // The map app keeps, per world, which 10 m cells of the island you've seen: around you as you play, where
+  // you saved, what you changed in the world, your camps and the places you found (store.explored). Explore
+  // covers the rest in mist, as thick as the Fog slider says (0 is none, 100 hides the map there). It's one
+  // canvas for the whole island, stretched over it like an image, so moving the map costs nothing; it's only
+  // painted again when cells are added. Guide, and the cave and bunker view, have no fog.
+  const GRID = { cell: 10, min: -2000, size: 400 };
+  const FOG_PX = 2; // canvas pixels per cell (5 m each)
+  map.createPane('fog').style.zIndex = 245; // over the map and the explored wash, under the cave veil and everything else
+  map.getPane('fog').style.pointerEvents = 'none';
+  const CanvasOverlay = L.ImageOverlay.extend({ // Leaflet's image overlay, with a canvas for the image
+    _initImage() {
+      const el = (this._image = this._url);
+      L.DomUtil.addClass(el, 'leaflet-image-layer');
+      if (this._zoomAnimated) L.DomUtil.addClass(el, 'leaflet-zoom-animated');
+      if (this.options.className) L.DomUtil.addClass(el, this.options.className);
+    },
+  });
+  const fogHoles = document.createElement('canvas'); // one pixel per cell, opaque where explored
+  fogHoles.width = fogHoles.height = GRID.size;
+  const fogCanvas = document.createElement('canvas');
+  fogCanvas.width = fogCanvas.height = GRID.size * FOG_PX;
+  const fogEnd = GRID.min + GRID.size * GRID.cell;
+  const fogLayer = new CanvasOverlay(fogCanvas, [[GRID.min, GRID.min], [fogEnd, fogEnd]], { pane: 'fog', interactive: false, className: 'fog-layer' });
+  let fogBits = null; // the explored cells of the world on screen: bit j * 400 + i, lowest bit first
+  let fogPainted = null;
+  const bitsFrom = (b64) => Uint8Array.from(atob(b64 || ''), (ch) => ch.charCodeAt(0));
+  const hasCell = (bits, k) => (bits[k >> 3] >> (k & 7)) & 1;
+  const fogActive = () => !!prefs.fogOn?.[exploring() ? 'explore' : 'guide'] && prefs.fog > 0;
+  // Clouds: four layers of smooth noise (big banks down to small wisps), light and dark, that tile without
+  // seams. Painted over the fog's own colour, so it reads as mist and not as a flat sheet.
+  const mist = (() => {
+    const S = 256;
+    const c = document.createElement('canvas');
+    c.width = c.height = S;
+    const ctx = c.getContext('2d');
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const field = new Float32Array(S * S);
+    for (const [n, weight] of [[4, 0.42], [8, 0.3], [16, 0.17], [32, 0.11]]) {
+      const g = Array.from({ length: n * n }, rnd);
+      const at = (i, j) => g[(j % n) * n + (i % n)];
+      for (let y = 0; y < S; y++) {
+        for (let x = 0; x < S; x++) {
+          const fx = (x / S) * n;
+          const fy = (y / S) * n;
+          const i = Math.floor(fx);
+          const j = Math.floor(fy);
+          const u = (fx - i) * (fx - i) * (3 - 2 * (fx - i));
+          const v = (fy - j) * (fy - j) * (3 - 2 * (fy - j));
+          const top = at(i, j) + (at(i + 1, j) - at(i, j)) * u;
+          const bottom = at(i, j + 1) + (at(i + 1, j + 1) - at(i, j + 1)) * u;
+          field[y * S + x] += weight * (top + (bottom - top) * v);
+        }
+      }
+    }
+    const img = ctx.createImageData(S, S);
+    for (let p = 0; p < S * S; p++) {
+      const d = (field[p] - 0.5) * 2.4; // about -1 (a gap in the clouds) to 1 (a thick bank)
+      const light = d > 0;
+      img.data[p * 4] = img.data[p * 4 + 1] = img.data[p * 4 + 2] = light ? 255 : 10;
+      img.data[p * 4 + 3] = Math.round(Math.min(1, Math.abs(d)) * (light ? 92 : 64));
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  })();
+  // The explored cells with gaps of up to about 40 m between them joined (grown by two cells, then shrunk
+  // back), so the places you went between don't show as specks. The share explored counts the cells themselves.
+  const FOG_JOIN = 2;
+  function joinedCells(bits) {
+    const N = GRID.size;
+    const a = new Uint8Array(N * N);
+    for (let k = 0; k < N * N; k++) a[k] = hasCell(bits, k);
+    const pass = (src, grow) => { // a square max (grow) or min (shrink) filter, rows then columns
+      const rows = new Uint8Array(N * N);
+      const out = new Uint8Array(N * N);
+      for (let j = 0; j < N; j++) {
+        for (let i = 0; i < N; i++) {
+          let v = grow ? 0 : 1;
+          for (let d = -FOG_JOIN; d <= FOG_JOIN; d++) {
+            const x = i + d;
+            const s = x < 0 || x >= N ? 1 - grow : src[j * N + x];
+            v = grow ? v | s : v & s;
+          }
+          rows[j * N + i] = v;
+        }
+      }
+      for (let j = 0; j < N; j++) {
+        for (let i = 0; i < N; i++) {
+          let v = grow ? 0 : 1;
+          for (let d = -FOG_JOIN; d <= FOG_JOIN; d++) {
+            const y = j + d;
+            const s = y < 0 || y >= N ? 1 - grow : rows[y * N + i];
+            v = grow ? v | s : v & s;
+          }
+          out[j * N + i] = v;
+        }
+      }
+      return out;
+    };
+    const joined = pass(pass(a, 1), 0);
+    for (let k = 0; k < N * N; k++) joined[k] |= a[k];
+    return joined;
+  }
+  function fogHolesFromBits() {
+    const N = GRID.size;
+    const joined = joinedCells(fogBits);
+    const ctx = fogHoles.getContext('2d');
+    const img = ctx.createImageData(N, N);
+    for (let j = 0; j < N; j++) {
+      for (let i = 0; i < N; i++) if (joined[j * N + i]) img.data[((N - 1 - j) * N + i) * 4 + 3] = 255; // north is up
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  // Mist everywhere, then the explored cells cut out of it: a wide, faint thinning around them (about 50 m)
+  // and a clear inside with a soft edge (about 15 m). With `part` (a box of cells), only around it.
+  function paintFog(part) {
+    const ctx = fogCanvas.getContext('2d');
+    const size = fogCanvas.width;
+    let src = [0, 0, GRID.size, GRID.size];
+    ctx.save();
+    if (part) {
+      const pad = 10; // the wide blur reaches this far (in cells), and takes in twice as much
+      ctx.beginPath();
+      ctx.rect((part.x0 - pad) * FOG_PX, (part.y0 - pad) * FOG_PX, (part.x1 - part.x0 + 1 + 2 * pad) * FOG_PX, (part.y1 - part.y0 + 1 + 2 * pad) * FOG_PX);
+      ctx.clip();
+      const sx = Math.max(0, part.x0 - 2 * pad);
+      const sy = Math.max(0, part.y0 - 2 * pad);
+      src = [sx, sy, Math.min(GRID.size, part.x1 + 1 + 2 * pad) - sx, Math.min(GRID.size, part.y1 + 1 + 2 * pad) - sy];
+    }
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = prefs.darkMap ? '#6f7c8e' : '#cdd4dc';
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = ctx.createPattern(mist, 'repeat');
+    ctx.fillRect(0, 0, size, size);
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.imageSmoothingEnabled = true;
+    const holes = () => ctx.drawImage(fogHoles, src[0], src[1], src[2], src[3], src[0] * FOG_PX, src[1] * FOG_PX, src[2] * FOG_PX, src[3] * FOG_PX);
+    ctx.filter = 'blur(10px)';
+    ctx.globalAlpha = 0.4;
+    holes();
+    ctx.filter = 'blur(3px)';
+    ctx.globalAlpha = 1;
+    holes();
+    ctx.restore();
+  }
+  function setFogWorld() {
+    fogBits = store.explored.get(store.view) || null;
+    fogPainted = null;
+    paintCave();
+    drawFog();
+    renderExploredStat();
+  }
+  function drawFog() {
+    if (caveDrawn) { // in a cave: its own fog
+      if (fogActive() !== caveDrawn.fogOn) paintCave();
+      else map.getPane('caveFog').style.opacity = String(1 - prefs.fog / 100);
+      renderCaveCount();
+    }
+    const on = !!fogBits && fogActive() && !cave;
+    if (on && fogPainted !== fogBits) { fogHolesFromBits(); paintFog(); fogPainted = fogBits; }
+    if (on !== map.hasLayer(fogLayer)) on ? fogLayer.addTo(map) : fogLayer.remove();
+    if (on) fogLayer.setOpacity(prefs.fog / 100);
+  }
+  // New cells (live, as you walk): cut them out and paint just that part again.
+  function addExplored(world, cells) {
+    const bits = store.explored.get(world);
+    if (!bits) return;
+    for (const k of cells) bits[k >> 3] |= 1 << (k & 7);
+    if (world !== store.view || fogPainted !== bits) return renderExploredStat();
+    fogHolesFromBits();
+    let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
+    for (const k of cells) {
+      const i = k % GRID.size;
+      const row = GRID.size - 1 - Math.floor(k / GRID.size);
+      x0 = Math.min(x0, i); y0 = Math.min(y0, row); x1 = Math.max(x1, i); y1 = Math.max(y1, row);
+    }
+    const join = FOG_JOIN * 2; // joining gaps reaches a little further than the new cells
+    paintFog({ x0: x0 - join, y0: y0 - join, x1: x1 + join, y1: y1 + join });
+    renderExploredStat();
+  }
+
+  // How much of the island you've explored: land cells only (not the sea or the lakes), from the island's
+  // 16 coarsest map tiles (4 m a pixel), worked out once.
+  let land = null; // Uint8Array(160000): 1 = land
+  let landCells = 0;
+  let landLoading = null;
+  function loadLand() {
+    landLoading ||= Promise.all([0, 1, 2, 3].flatMap((x) => [0, 1, 2, 3].map((y) => new Promise((ok) => {
+      const img = new Image();
+      img.onload = () => ok({ img, x, y });
+      img.onerror = () => ok(null);
+      img.src = `tiles/2-${x}-${y}.webp`;
+    })))).then((tiles) => {
+      if (tiles.some((t) => !t)) return;
+      const c = document.createElement('canvas');
+      c.width = c.height = GRID.size; // the 1000 x 1000 pixels of tiles, averaged into one pixel per cell
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      for (const t of tiles) ctx.drawImage(t.img, (t.x * GRID.size) / 4, (t.y * GRID.size) / 4, GRID.size / 4, GRID.size / 4);
+      const px = ctx.getImageData(0, 0, GRID.size, GRID.size).data;
+      land = new Uint8Array(GRID.size * GRID.size);
+      for (let j = 0; j < GRID.size; j++) {
+        for (let i = 0; i < GRID.size; i++) {
+          const p = ((GRID.size - 1 - j) * GRID.size + i) * 4;
+          if (!isWater(px[p], px[p + 1], px[p + 2])) { land[j * GRID.size + i] = 1; landCells++; }
+        }
+      }
+      renderExploredStat();
+    });
+    return landLoading;
+  }
+  const isWater = (r, g, b) => b > r + 12 && b > g - 4;
+  let statTimer = 0;
+  function renderExploredStat() {
+    clearTimeout(statTimer);
+    statTimer = setTimeout(() => {
+      const el = $('#explored-stat');
+      const show = !!fogBits && exploring();
+      el.hidden = !show;
+      if (!show) return;
+      if (!land) { loadLand(); return; }
+      let n = 0;
+      for (let k = 0; k < land.length; k++) if (land[k] && hasCell(fogBits, k)) n++;
+      const pct = landCells ? (n * 100) / landCells : 0;
+      const shown = pct > 0 && pct < 1 ? pct.toFixed(1) : Math.round(pct);
+      el.innerHTML = `<span>Explored</span><b>${shown}%</b> of the island<span class="bar"><i style="width:${pct.toFixed(1)}%"></i></span>`;
+      if (!fogMenu.hidden) renderFogMenu();
+    }, 150);
+  }
+
   // Live updates arrive twice a second, so the trail isn't drawn again unless something about it changed;
   // a new step on the end is just added to the line.
   let trailDrawn = null; // { sig, ref, count, line, last }
   function drawTrail({ added } = {}) {
     drawExplored();
+    drawFog();
     if (!$('#trail-menu').hidden) renderTrailMenu();
     const world = store.view || store.position?.world;
     const since = trailSince();
@@ -876,10 +1123,21 @@
     trailLayer.clearLayers();
     trailDrawn = { sig, ref: store.trail, count: store.trail.length, line: null, last: null };
     if (!prefs.showTrail || cave) return;
-    for (const sp of store.worlds.get(store.view)?.history?.spots || []) {
+    // Spots close together are one dot: you save at your base again and again, and a stack of dots, each a
+    // little off the last, turns into a heavy ring.
+    const together = (list, metres) => {
+      const groups = [];
+      for (const p of list) {
+        const g = groups.find((q) => Math.hypot(q.x - p.x, q.y - p.y) < metres);
+        if (!g) groups.push({ x: p.x, y: p.y, n: 1, last: p });
+        else { g.n++; if ((p.t || 0) > (g.last.t || 0)) g.last = p; }
+      }
+      return groups;
+    };
+    for (const sp of together(store.worlds.get(store.view)?.history?.spots || [], 6)) {
       L.circleMarker([sp.y, sp.x], {
         radius: 3.5, color: '#1d0e02', weight: 1.5, fillColor: '#f4efe6', fillOpacity: 0.9, renderer: trailRenderer, className: 'trail-dot',
-      }).bindTooltip('Your zip line', { direction: 'top' }).addTo(trailLayer);
+      }).bindTooltip(sp.n > 1 ? `Your zip lines (${sp.n} ends)` : 'Your zip line', { direction: 'top' }).addTo(trailLayer);
     }
     const pts = thin(shownTrail().filter((p) => !p.c)); // underground steps would scribble over the island
     if (!pts.length) return;
@@ -889,11 +1147,11 @@
         color: '#ff7b22', weight: 2.5, opacity: 0.85, dashArray: '6 7', renderer: trailRenderer, interactive: false,
       }).addTo(trailLayer);
     }
-    for (const p of pts) {
-      if (p.s !== 'save') continue;
-      L.circleMarker([p.y, p.x], {
+    for (const g of together(pts.filter((p) => p.s === 'save'), 25)) {
+      const p = g.last;
+      L.circleMarker([g.y, g.x], {
         radius: 4.5, color: '#1d0e02', weight: 1.5, fillColor: '#ff7b22', fillOpacity: 1, renderer: trailRenderer, className: 'trail-dot',
-      }).bindTooltip(`Saved here · ${(p.l || '').replace(/_/g, ' ')}<br>${new Date(p.t * 1000).toLocaleString()}`, { direction: 'top' })
+      }).bindTooltip(`${g.n > 1 ? `Saved here ${g.n} times, last` : 'Saved here'} · ${(p.l || '').replace(/_/g, ' ')}<br>${new Date(p.t * 1000).toLocaleString()}`, { direction: 'top' })
         .addTo(trailLayer);
     }
   }
@@ -906,8 +1164,205 @@
   let caveDismissed = null; // id of a cave the user switched away from while still inside it
   map.createPane('caveVeil').style.zIndex = 250;
   map.createPane('caveCells').style.zIndex = 260;
-  const caveRenderer = L.canvas({ pane: 'caveCells', padding: 0.5 });
   const caveLayer = L.layerGroup().addTo(map);
+  // ---------- cave and bunker maps ----------
+  // Each cave or bunker is drawn once onto two canvases stretched over it (like the island's fog): the parts
+  // you've seen, and the parts you haven't. Its floors are in colour (found by caves.js), ramps and shafts
+  // in grey, with dark walls where a floor ends and a faint 10 m grid. The floor chips in the banner fade
+  // the other floors, and the items on them. Explore's fog: the map app keeps which outline cells you've seen
+  // (around you underground, your underground trail, what you changed on its floor, what you found in it);
+  // the unseen parts are drawn misty on a pane as see-through as the Fog slider says (hidden at 100). Each
+  // floor has its own fog, so the part of floor 2 you haven't been to stays fogged over a floor 1 you have.
+  const FLOOR_COLORS = ['hsl(172,34%,46%)', 'hsl(38,64%,58%)', 'hsl(268,30%,64%)', 'hsl(346,46%,62%)', 'hsl(118,28%,52%)'];
+  const RAMP_COLOR = 'hsl(220,8%,70%)';
+  map.createPane('caveFog').style.zIndex = 259;
+  map.getPane('caveFog').style.pointerEvents = 'none';
+  const caveMaps = new Map(); // area id -> SOTF_CAVES.analyse(area), worked out the first time it's shown
+  const caveMapOf = (area) => {
+    if (!caveMaps.has(area.id)) caveMaps.set(area.id, window.SOTF_CAVES.analyse(area));
+    return caveMaps.get(area.id);
+  };
+  const CAVE_PAD = 3; // cells of room around the outline
+  let caveDrawn = null; // { area, m, px, fogOn, seenCanvas, unseenCanvas, seen, unseen }
+  let caveFloor = { area: null, pick: 'all', manual: false }; // the floor filter: 'all', a floor's index, or 'ramps'
+  const underBits = (id) => store.exploredUnder.get(store.view)?.get(id) || null;
+  const pickOf = (area) => (area && caveFloor.area === area.id ? caveFloor.pick : 'all');
+  const layerPick = (layer) => (layer.floor < 0 ? 'ramps' : layer.floor);
+  function paintCaveCanvas(canvas, area, m, px, part) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const c = m.cell;
+    const left = (m.gx0 - CAVE_PAD) * c - c / 2; // the world x of the canvas's left edge
+    const top = (m.gz1 + CAVE_PAD) * c + c / 2; // the world z of its top edge: north is up
+    if (part === 'seen') { // a faint 10 m grid
+      ctx.fillStyle = 'rgba(255,255,255,.07)';
+      for (let x = Math.ceil(left / 10) * 10; (x - left) / c * px < canvas.width; x += 10) ctx.fillRect(Math.round(((x - left) / c) * px), 0, 1, canvas.height);
+      for (let z = Math.floor(top / 10) * 10; (top - z) / c * px < canvas.height; z -= 10) ctx.fillRect(0, Math.round(((top - z) / c) * px), canvas.width, 1);
+    }
+    const fogOn = fogActive();
+    const bits = underBits(area.id);
+    const pick = pickOf(area);
+    // ramps and shafts at the bottom, then the floors from the lowest up, and the floor you picked on top
+    const order = [...m.layers].sort((a, b) => (layerPick(a) === pick) - (layerPick(b) === pick) || a.floor - b.floor);
+    const wall = Math.max(2, Math.round(px * 0.28));
+    for (const layer of order) {
+      ctx.globalAlpha = pick === 'all' || layerPick(layer) === pick ? 1 : 0.15;
+      const seen = (cl) => !fogOn || (!!bits && cl.src.some((k) => hasCell(bits, k)));
+      const mine = layer.cells.filter((cl) => seen(cl) === (part === 'seen'));
+      ctx.fillStyle = part === 'unseen' ? 'hsl(212,12%,50%)' : layer.floor < 0 ? RAMP_COLOR : FLOOR_COLORS[layer.floor];
+      for (const cl of mine) ctx.fillRect((cl.gx - m.gx0 + CAVE_PAD) * px, (m.gz1 + CAVE_PAD - cl.gz) * px, px, px);
+      ctx.fillStyle = part === 'unseen' ? 'rgba(28,36,46,.9)' : 'rgba(10,12,14,.88)'; // walls: where the floor ends
+      for (const cl of mine) {
+        const x = (cl.gx - m.gx0 + CAVE_PAD) * px;
+        const y = (m.gz1 + CAVE_PAD - cl.gz) * px;
+        if (!layer.has.has(m.key(cl.gx - 1, cl.gz))) ctx.fillRect(x, y, wall, px);
+        if (!layer.has.has(m.key(cl.gx + 1, cl.gz))) ctx.fillRect(x + px - wall, y, wall, px);
+        if (!layer.has.has(m.key(cl.gx, cl.gz + 1))) ctx.fillRect(x, y, px, wall);
+        if (!layer.has.has(m.key(cl.gx, cl.gz - 1))) ctx.fillRect(x, y + px - wall, px, wall);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+  function drawCaveCells(area) {
+    if (caveDrawn) { caveDrawn.seen.remove(); caveDrawn.unseen.remove(); }
+    caveDrawn = null;
+    renderFloorChips(area);
+    if (!area) return;
+    const m = caveMapOf(area);
+    const w = m.gx1 - m.gx0 + 1 + 2 * CAVE_PAD;
+    const h = m.gz1 - m.gz0 + 1 + 2 * CAVE_PAD;
+    const px = Math.max(3, Math.min(10, Math.floor(2400 / Math.max(w, h)))); // canvas pixels per 2 m cell
+    const canvas = () => Object.assign(document.createElement('canvas'), { width: w * px, height: h * px });
+    const c = m.cell;
+    const bounds = [[(m.gz0 - CAVE_PAD) * c - c / 2, (m.gx0 - CAVE_PAD) * c - c / 2], [(m.gz1 + CAVE_PAD) * c + c / 2, (m.gx1 + CAVE_PAD) * c + c / 2]];
+    const seenCanvas = canvas();
+    const unseenCanvas = canvas();
+    caveDrawn = {
+      area, m, px, seenCanvas, unseenCanvas,
+      seen: new CanvasOverlay(seenCanvas, bounds, { pane: 'caveCells', interactive: false, className: 'cave-map' }).addTo(map),
+      unseen: new CanvasOverlay(unseenCanvas, bounds, { pane: 'caveFog', interactive: false, className: 'cave-map' }).addTo(map),
+    };
+    paintCave();
+  }
+  function paintCave() {
+    const d = caveDrawn;
+    if (!d) return;
+    d.fogOn = fogActive();
+    paintCaveCanvas(d.seenCanvas, d.area, d.m, d.px, 'seen');
+    paintCaveCanvas(d.unseenCanvas, d.area, d.m, d.px, 'unseen');
+    map.getPane('caveFog').style.opacity = String(1 - prefs.fog / 100);
+    renderCaveCount();
+  }
+  let cavePaintTimer = 0;
+  function paintCaveSoon() { // live steps come twice a second; the cave is painted again at most every 0.4 s
+    if (!cavePaintTimer) cavePaintTimer = setTimeout(() => { cavePaintTimer = 0; paintCave(); }, 400);
+  }
+
+  // The floor chips: All floors, Floor 1, Floor 2, ..., Ramps and shafts.
+  function renderFloorChips(area) {
+    const box = $('#cave-floors');
+    const m = area ? caveMapOf(area) : null;
+    box.hidden = !m || m.layers.length < 2; // what's drawn: a flat bunker has nothing to pick
+    if (box.hidden) return;
+    const pick = pickOf(area);
+    const drawn = new Set(m.layers.map((l) => l.floor));
+    const chip = (v, label, color, title) => `<button type="button" data-floor="${v}" aria-pressed="${String(pick) === String(v)}"${title ? ` title="${title}"` : ''}>${color ? `<i style="background:${color}"></i>` : ''}${label}</button>`;
+    box.innerHTML = chip('all', 'All floors')
+      + m.floors.map((f, i) => (drawn.has(i) ? chip(i, `Floor ${i + 1}`, FLOOR_COLORS[i], `At about ${Math.round(f.h)} m`) : '')).join('')
+      + (drawn.has(-1) ? chip('ramps', 'Ramps and shafts', RAMP_COLOR) : '');
+  }
+  function setCaveFloor(pick, manual) {
+    if (!cave) return;
+    if (caveFloor.area === cave.id && caveFloor.pick === pick) {
+      caveFloor.manual ||= manual;
+      return;
+    }
+    caveFloor = { area: cave.id, pick, manual };
+    renderFloorChips(cave);
+    paintCave();
+    for (const l of LOCS) if (l.a === cave.id) paintMarker(l.id);
+  }
+  $('#cave-floors').addEventListener('click', (e) => {
+    const v = e.target.closest('[data-floor]')?.dataset.floor;
+    if (v != null) setCaveFloor(v === 'all' || v === 'ramps' ? v : Number(v), true);
+  });
+  // Underground and live: the floor you're on (the one nearest your height), until you pick one yourself.
+  function autoCaveFloor() {
+    const pos = store.position;
+    if (!cave || cave.manual || !pos || pos.source !== 'live' || pos.h == null) return;
+    if (caveFloor.area === cave.id && caveFloor.manual) return;
+    const m = caveMapOf(cave);
+    if (m.layers.length < 2 || !m.floors.length) return;
+    let best = 0;
+    m.floors.forEach((f, i) => { if (Math.abs(f.h - pos.h) < Math.abs(m.floors[best].h - pos.h)) best = i; });
+    setCaveFloor(best, false);
+  }
+  // An item in a cave is on the floor of the outline cell nearest to it.
+  const locFloor = new Map();
+  function otherFloor(l) {
+    if (!cave || l.a !== cave.id) return false;
+    const pick = pickOf(cave);
+    if (pick === 'all') return false;
+    if (!locFloor.has(l.id)) {
+      const m = caveMapOf(AREA[l.a]);
+      const gx = Math.round(l.x / m.cell);
+      const gz = Math.round(l.y / m.cell);
+      let best = Infinity;
+      let floor = -1;
+      for (let dx = -6; dx <= 6; dx++) {
+        for (let dz = -6; dz <= 6; dz++) {
+          for (const k of m.at.get(m.key(gx + dx, gz + dz)) || []) {
+            if (dx * dx + dz * dz < best) { best = dx * dx + dz * dz; floor = m.floorOf[k]; }
+          }
+        }
+      }
+      locFloor.set(l.id, floor);
+    }
+    const f = locFloor.get(l.id);
+    return (f < 0 ? 'ramps' : f) !== pick;
+  }
+  // The scale bar (a round length, 10 m when it fits) and north, at the bottom of the cave view.
+  function renderCaveLegend() {
+    if (!cave) return;
+    const perM = Math.abs(map.latLngToContainerPoint([0, 10]).x - map.latLngToContainerPoint([0, 0]).x) / 10;
+    const len = [10, 20, 50, 100, 200, 500].find((v) => v * perM >= 36) || 500;
+    const el = $('#cave-legend');
+    el.querySelector('i').style.width = `${Math.round(len * perM)}px`;
+    el.querySelector('em').textContent = `${len} m`;
+  }
+  map.on('zoomend', renderCaveLegend);
+
+  function caveExplored(area) {
+    const bits = underBits(area.id);
+    let n = 0;
+    if (bits) for (let k = 0; k < area.cells.length; k++) n += hasCell(bits, k);
+    const pct = area.cells.length ? (n * 100) / area.cells.length : 0;
+    return pct > 0 && pct < 1 ? pct.toFixed(1) : Math.round(pct);
+  }
+  function renderCaveCount() {
+    if (!cave) return;
+    const here = LOCS.filter((l) => l.a === cave.id);
+    const where = cave.kind === 'cave' ? ' in this cave' : ' in this bunker';
+    $('#cave-count').textContent = exploring()
+      ? `${here.filter((l) => store.found.has(l.id)).length} of ${here.length} found${where} · Explored ${caveExplored(cave)}%`
+      : `${here.length} item${here.length === 1 ? '' : 's'}${where}`;
+  }
+  function underSets(world) {
+    if (!store.exploredUnder.has(world)) store.exploredUnder.set(world, new Map());
+    return store.exploredUnder.get(world);
+  }
+  // Cells just seen in a cave (live): the one on screen is painted again.
+  function addExploredUnder(world, id, cells) {
+    const area = AREA[id];
+    if (!area) return;
+    const sets = underSets(world);
+    if (!sets.has(id)) sets.set(id, new Uint8Array((area.cells.length + 7) >> 3));
+    const bits = sets.get(id);
+    for (const k of cells) bits[k >> 3] |= 1 << (k & 7);
+    if (world !== store.view || caveDrawn?.area.id !== id) return;
+    paintCaveSoon();
+    if (!fogMenu.hidden) renderFogMenu();
+  }
 
   // The game's AreaMask bits (Sons.Areas.AreaMask): caves A-H and the seven bunkers.
   const AREA_CAVES = 478;
@@ -961,21 +1416,7 @@
       L.rectangle([[-3000, -3000], [3000, 3000]], {
         pane: 'caveVeil', stroke: false, fillColor: '#07090a', fillOpacity: 0.88, interactive: false,
       }).addTo(caveLayer);
-      // Soft overlapping dots turn the scattered cells into corridors; lighter = higher up.
-      const [lo, hi] = area.y;
-      for (const [x, z, y] of area.cells) {
-        const t = hi > lo ? (y - lo) / (hi - lo) : 0.5;
-        L.circle([z, x], {
-          radius: area.cell * 1.7, renderer: caveRenderer, stroke: false,
-          fillColor: `hsl(32, 14%, ${30 + t * 38}%)`, fillOpacity: 0.45, interactive: false,
-        }).addTo(caveLayer);
-      }
-      const here = LOCS.filter((l) => l.a === area.id);
-      const count = here.length;
-      const where = area.kind === 'cave' ? ' in this cave' : ' in this bunker';
       $('#cave-name').textContent = area.name;
-      $('#cave-count').textContent = exploring() ? `${here.filter((l) => store.found.has(l.id)).length} of ${count} found${where}`
-        : `${count} item${count === 1 ? '' : 's'}${where}`;
       banner.hidden = false;
       const [x0, z0, x1, z1] = area.bounds;
       if (following && store.position) map.panTo([store.position.y, store.position.x]);
@@ -983,6 +1424,9 @@
     } else {
       banner.hidden = true;
     }
+    if (!area || caveFloor.area !== area.id) caveFloor = { area: null, pick: 'all', manual: false };
+    drawCaveCells(cave);
+    renderCaveLegend();
     applyFilters();
     drawTrail();
     updateStatus();
@@ -1129,7 +1573,9 @@
   function historyPoints(w) {
     const spots = (w?.history?.spots || []).map((s) => ({ ...s, s: 'spot' }));
     const camps = (w?.camps || []).map((c) => ({ x: c.x, y: c.y, h: c.h, s: 'camp' }));
-    return [...spots, ...camps];
+    // where this world began: the crash site it started at (each playthrough picks one)
+    const crash = w?.history?.crashSite && LOCS.find((l) => l.c === 'spawn' && l.t.toLowerCase().startsWith(w.history.crashSite));
+    return [...spots, ...camps, ...(crash ? [{ x: crash.x, y: crash.y, s: 'start' }] : [])];
   }
   // Everything you changed in the world, from all your saves of it: trees you felled, bushes you picked,
   // crates you opened, things you broke or took. Each spot comes with the time of the save it first shows up
@@ -1811,6 +2257,7 @@
 
   function renderSidebar() {
     renderUnlock();
+    onFoundChange?.();
     $('#summary').innerHTML = SUMMARY.map((s) => {
       const keys = CATS.filter((c) => c.group === s.group && !s.skip.includes(c.key)).map((c) => c.key);
       const { total, found } = counts(keys);
@@ -1866,9 +2313,12 @@
   autoBox.onchange = () => { prefs.autoMark = autoBox.checked; savePrefs(); autoMark(); };
 
   let clearArmed = null;
+  let clearArmedAt = 0;
   $('#clear-trail').onclick = async (e) => {
     const btn = e.currentTarget;
+    if (clearArmed && performance.now() - clearArmedAt < 450) return; // a double click isn't a second, deliberate tap
     if (!clearArmed) {
+      clearArmedAt = performance.now();
       btn.textContent = 'Tap again to reset';
       clearArmed = setTimeout(() => { btn.textContent = 'Reset trail'; clearArmed = null; }, 3000);
       return;
@@ -1992,7 +2442,7 @@
     modeSwitch.querySelector('.ms-label').textContent = guide ? 'Guide' : 'Explore';
     modeSwitch.querySelector('.ms-icon').innerHTML = MODE_ICON[guide ? 'guide' : 'explore'];
   }
-  function setMode(mode) {
+  function setMode(mode, { quiet = false } = {}) {
     hideModeWarn();
     if (mode === prefs.mode) return;
     prefs.mode = mode;
@@ -2003,8 +2453,11 @@
     renderSidebar();
     if (selected) renderDetail();
     drawGuide();
+    renderFogBtn();
+    drawFog();
+    renderExploredStat();
     if (!results.hidden) runSearch();
-    toast(exploring() ? "Explore: only places you've found are shown" : 'Guide: every location is shown, spoilers included');
+    if (!quiet) toast(exploring() ? "Explore: only places you've found are shown" : 'Guide: every location is shown, spoilers included');
   }
   // Explore -> Guide asks first (a small card under the slider, a little sheet on phones); back is one tap.
   function askGuide() {
@@ -2076,6 +2529,8 @@
   function applyDarkMap() {
     document.body.classList.toggle('dark-map', prefs.darkMap);
     darkBtn.setAttribute('aria-pressed', prefs.darkMap);
+    fogPainted = null; // the mist's colour goes with the map
+    drawFog();
   }
   darkBtn.onclick = () => { prefs.darkMap = !prefs.darkMap; savePrefs(); applyDarkMap(); };
   applyDarkMap();
@@ -2133,6 +2588,92 @@
   trailShow.onchange = () => setShowTrail(trailShow.checked);
   exploredShow.onchange = () => { prefs.showExplored = exploredShow.checked; savePrefs(); drawExplored(); };
 
+  // ---------- the Fog button: on or off, and how thick ----------
+  // A click (tap) turns the fog on or off, for the mode you're in: on in Explore, off in Guide until you turn
+  // it on. Its slider (how thick) and how much you've explored show when you point at the button on a PC,
+  // and when you turn the fog on on a phone, until you tap somewhere else.
+  const fogBtn = $('#fog-btn');
+  const fogMenu = $('#fog-menu');
+  const fogRange = $('#fog-range');
+  let fogAsking = false;
+  const fogKey = () => (exploring() ? 'explore' : 'guide');
+  function renderFogBtn() {
+    const on = !!prefs.fogOn?.[fogKey()];
+    fogBtn.setAttribute('aria-pressed', on);
+    fogBtn.title = on ? `Fog: on (${prefs.fog}%). Click to turn it off` : 'Fog: off. Click to turn it on';
+  }
+  function setFogOn(on) {
+    prefs.fogOn = { ...prefs.fogOn, [fogKey()]: on };
+    savePrefs();
+    renderFogBtn();
+    drawFog();
+    if (!fogMenu.hidden) renderFogMenu();
+  }
+  function renderFogMenu() {
+    const on = !!prefs.fogOn?.[fogKey()];
+    fogRange.value = prefs.fog;
+    $('#fog-value').textContent = on ? `${prefs.fog}%` : 'Off';
+    const stat = $('#explored-stat').querySelector('b')?.textContent;
+    const inCave = caveDrawn ? (caveDrawn.area.kind === 'cave' ? 'this cave' : 'this bunker') : null;
+    $('#fog-note').textContent = (!on ? 'Fog is off. Slide to turn it on. ' : '') + (inCave ? `You've explored ${caveExplored(caveDrawn.area)}% of ${inCave}.`
+      : !fogBits ? 'Nothing explored in this world yet.'
+      : stat ? `You've explored ${stat} of the island.` : '');
+    $('#fog-reset').innerHTML = !fogAsking
+      ? `<button class="text-btn danger" data-fog-reset="ask"${fogBits || inCave ? '' : ' disabled'}>Reset exploration</button>`
+      : inCave
+        ? `<span>Put the fog back over ${inCave}, or over everything (the island and every cave and bunker)? Your trail and found places stay.</span>
+           <button class="danger-btn" data-fog-reset="area">Reset ${inCave}</button><button class="danger-btn" data-fog-reset="yes">Everything</button><button class="text-btn" data-fog-reset="no">Cancel</button>`
+        : `<span>Put the fog back over the whole island and its caves and bunkers? Your trail and found places stay.</span><button class="danger-btn" data-fog-reset="yes">Reset</button><button class="text-btn" data-fog-reset="no">Cancel</button>`;
+  }
+  function openFogMenu(open) {
+    fogMenu.hidden = !open;
+    fogAsking = false;
+    if (!open) return;
+    if (!trailMenu.hidden) openTrailMenu(false);
+    fogMenu.style.top = `${fogBtn.getBoundingClientRect().top}px`;
+    renderFogMenu();
+  }
+  fogBtn.onclick = () => {
+    const on = !prefs.fogOn?.[fogKey()];
+    setFogOn(on);
+    if (!canHover) openFogMenu(on);
+  };
+  if (canHover) { // pointing at the button (or its slider) shows the slider; it goes a moment after you leave
+    let leaveTimer = 0;
+    const show = () => { clearTimeout(leaveTimer); if (fogMenu.hidden) openFogMenu(true); };
+    const hide = () => { clearTimeout(leaveTimer); leaveTimer = setTimeout(() => { if (!fogAsking) openFogMenu(false); }, 400); };
+    for (const el of [fogBtn, fogMenu]) { el.addEventListener('mouseenter', show); el.addEventListener('mouseleave', hide); }
+    fogBtn.addEventListener('focus', show);
+  }
+  document.addEventListener('pointerdown', (e) => {
+    if (!fogMenu.hidden && !fogMenu.contains(e.target) && !fogBtn.contains(e.target)) openFogMenu(false);
+  });
+  fogRange.addEventListener('input', () => {
+    prefs.fog = Number(fogRange.value);
+    if (!prefs.fogOn?.[fogKey()]) return setFogOn(true); // sliding turns it on
+    $('#fog-value').textContent = `${prefs.fog}%`;
+    renderFogBtn();
+    drawFog();
+  });
+  fogRange.addEventListener('change', savePrefs);
+  renderFogBtn();
+  fogMenu.addEventListener('click', async (e) => {
+    const act = e.target.closest('[data-fog-reset]')?.dataset.fogReset;
+    if (act === 'ask' || act === 'no') { fogAsking = act === 'ask'; return renderFogMenu(); }
+    if (act !== 'yes' && act !== 'area') return;
+    fogAsking = false;
+    const area = act === 'area' ? caveDrawn?.area : null;
+    openFogMenu(false);
+    const world = store.view;
+    try { await api('explored/reset', { world, area: area?.id }); } catch { return toast('Could not reset the fog. Is the map window on your PC still open?'); }
+    toast(area ? `The fog is back over ${area.name}` : 'The fog is back over the island and its caves', {
+      action: 'Undo', ms: 6000,
+      onAction: async () => {
+        try { await api('explored/restore', { world }); toast('Your explored map is back'); } catch { toast('Could not bring it back.'); }
+      },
+    });
+  });
+
   // Removes the trail of the world on screen (not your other worlds); Undo brings it back for a few seconds.
   async function resetTrail() {
     const world = store.view || store.position?.world || null;
@@ -2164,7 +2705,7 @@
   let dismissing = false;
   let pendingDraft = 0;
   mapEl.addEventListener('pointerdown', () => {
-    dismissing = !!selected || !results.hidden || !trailMenu.hidden || !$('#mode-sheet').hidden || !!spread;
+    dismissing = !!selected || !results.hidden || !trailMenu.hidden || !fogMenu.hidden || !$('#mode-sheet').hidden || !!spread;
   }, true);
   map.on('click', (e) => {
     if (draft) return moveDraft(e.latlng);
@@ -2268,6 +2809,7 @@
   }
   let toastTimer;
   function toast(msg, { action, onAction, ms = 2800 } = {}) {
+    if (welcomeStep) { heldToast = [msg, { action, onAction, ms }]; return; } // after the welcome, not under it
     const el = $('#toast');
     el.textContent = msg;
     if (action) {
@@ -2381,6 +2923,8 @@
   function setWorlds(active, list, { quiet = false } = {}) {
     const before = store.active;
     store.worlds = new Map((list || []).map((w) => [w.uid, w]));
+    store.explored = new Map((list || []).filter((w) => w.explored).map((w) => [w.uid, bitsFrom(w.explored)]));
+    store.exploredUnder = new Map((list || []).map((w) => [w.uid, new Map(Object.entries(w.exploredUnder || {}).map(([id, b]) => [id, bitsFrom(b)]))]));
     store.active = active;
     if (!store.viewPinned || !store.worlds.has(store.view)) {
       store.viewPinned = false;
@@ -2413,6 +2957,7 @@
       markers.get(l.id)?.setLatLng([l.y, l.x]);
     }
     applyWorld({ camps: w.camps, vehicles: w.vehicles, time: w.last });
+    setFogWorld();
     setTimeout(applyHistory, 0); // after the found markers of this world are in
     LOCS.forEach((l) => paintMarker(l.id));
     applyFilters();
@@ -2519,6 +3064,18 @@
     });
     es.addEventListener('update', (e) => applyUpdate(JSON.parse(e.data)));
     es.addEventListener('trail', (e) => { store.trail = JSON.parse(e.data); drawTrail(); autoMark(); });
+    es.addEventListener('explored', (e) => {
+      const m = JSON.parse(e.data);
+      if (m.cells) return addExplored(m.world, m.cells);
+      store.explored.set(m.world, bitsFrom(m.bits)); // a reset, or its undo
+      if (m.world === store.view) setFogWorld();
+    });
+    es.addEventListener('exploredUnder', (e) => {
+      const m = JSON.parse(e.data);
+      if (m.cells) return addExploredUnder(m.world, m.area, m.cells);
+      underSets(m.world).set(m.area, bitsFrom(m.bits)); // a reset, or its undo
+      if (m.world === store.view && caveDrawn?.area.id === m.area) paintCave();
+    });
     es.addEventListener('trailAdd', (e) => {
       const p = JSON.parse(e.data);
       store.trail.push(p);
@@ -2661,17 +3218,185 @@
   updateCheck.onchange = () => updateAction({ action: 'setting', on: updateCheck.checked });
   setInterval(() => { if (update?.repo) renderUpdate(); }, 60000); // keeps "checked 5 min ago" current
 
+  // ---------- welcome (the first time on a device) ----------
+  // Three short steps over the map, so what you pick shows straight away: how you want to play (Explore or
+  // Guide), how it looks (dark or light, and in Explore how much fog), and where the controls are. Skip, Esc or a swipe down
+  // closes it at any step, keeping what you picked. It shows once per device, only when nothing is saved
+  // here yet; "Show welcome again" in the side panel brings it back.
+  const WELCOME_KEY = 'sotf-live-map-welcome';
+  const welcomeEl = $('#welcome');
+  const welcomeCard = $('#welcome-card');
+  const coachEl = $('#coach');
+  const FOG_CHOICES = [['off', 'Off', 0], ['light', 'Light', 35], ['thick', 'Thick', 70], ['full', 'Full', 100]];
+  const fogChoice = () => (!prefs.fogOn?.explore ? 'off' : prefs.fog <= 50 ? 'light' : prefs.fog <= 85 ? 'thick' : 'full');
+  const welcomeSteps = () => 3;
+  function renderWelcome() {
+    const verb = canHover ? 'Click' : 'Tap';
+    const of = (n) => `<p class="welcome-step">Step ${n} of ${welcomeSteps()}</p>`;
+    const live = store.position?.source === 'live' && Date.now() / 1000 - store.position.time < 30;
+    const liveLine = live ? '' : '<p class="welcome-note">Your live position appears once you start the game with the mod.</p>';
+    welcomeEl.classList.toggle('tour', welcomeStep === 3);
+    if (welcomeStep === 1) {
+      const n = store.found.size;
+      const saves = store.info && !store.info.savesFound || !store.worlds.size
+        ? 'Start a game and save once, and the map fills in.'
+        : n ? `I found your saves: ${n} place${n === 1 ? ' is' : 's are'} already marked as found or visited.` : 'I found your saves. What you find from now on is marked for you.';
+      const card = (mode, title, text, badge) => `<button type="button" class="welcome-option" role="radio" data-welcome-mode="${mode}" aria-checked="${prefs.mode === mode}">
+        ${badge ? `<span class="welcome-badge">${badge}</span>` : ''}<strong>${title}</strong><span>${text}</span></button>`;
+      welcomeCard.innerHTML = `${of(1)}<h2 id="welcome-title">How do you want to play?</h2>
+        <div class="welcome-options" role="radiogroup" aria-label="How you want to play">
+          ${card('explore', 'Explore', "Discover it yourself. The map shows where you've been and what you've found. Nothing gets spoiled.", 'Recommended')}
+          ${card('guide', 'Guide', 'Show me everything. Every location, with directions. Spoilers included.')}
+        </div>
+        <p class="welcome-note">${saves}</p>${liveLine}
+        <div class="welcome-actions"><button type="button" class="text-btn" data-welcome="skip">Skip</button><button type="button" class="primary" data-welcome="next">Next</button></div>`;
+    } else if (welcomeStep === 2) {
+      const pick = fogChoice();
+      const look = (key, label) => `<button type="button" role="radio" data-welcome-look="${key}" aria-checked="${prefs.darkMap === (key === 'dark')}"><i class="look-swatch ${key}" aria-hidden="true"></i>${label}</button>`;
+      welcomeCard.innerHTML = `${of(2)}<h2 id="welcome-title">Make it yours</h2>
+        <div class="welcome-row"><h3 id="welcome-look">Look</h3>
+          <div class="welcome-chips two" role="radiogroup" aria-labelledby="welcome-look">${look('dark', 'Dark')}${look('light', 'Light')}</div></div>
+        ${exploring() ? `<div class="welcome-row"><h3 id="welcome-fog">Fog over what you haven't explored</h3>
+          <div class="welcome-chips" role="radiogroup" aria-labelledby="welcome-fog">
+          ${FOG_CHOICES.map(([key, label]) => `<button type="button" role="radio" data-welcome-fog="${key}" aria-checked="${pick === key}">${label}</button>`).join('')}
+          </div></div>` : ''}
+        <p class="welcome-note">You can change ${exploring() ? 'these' : 'this'} any time with the buttons on the right.</p>
+        <div class="welcome-actions"><button type="button" class="text-btn" data-welcome="back">Back</button><button type="button" class="text-btn" data-welcome="skip">Skip</button><button type="button" class="primary" data-welcome="next">Next</button></div>`;
+    } else if (welcomeStep === 3) {
+      welcomeCard.innerHTML = `${of(welcomeSteps())}<h2 id="welcome-title">Quick tour</h2>
+        <p class="welcome-note">The controls you'll use most. ${verb} anything on the map for its card.</p>${liveLine}
+        <div class="welcome-actions"><button type="button" class="text-btn" data-welcome="back">Back</button><button type="button" class="primary" data-welcome="done">Start playing</button></div>`;
+    }
+    renderCoach();
+  }
+  // The tour's notes, each next to the real control it's about.
+  function renderCoach() {
+    coachEl.hidden = welcomeStep !== 3;
+    if (coachEl.hidden) { coachEl.innerHTML = ''; return; }
+    const verb = canHover ? 'Click' : 'Tap';
+    const notes = [
+      { el: '#mode-switch', side: 'below', text: 'Explore or Guide. Switch any time; Guide asks first.' },
+      { el: '#follow', side: 'left', text: 'Keeps you in the middle of the map.' },
+      { el: '#fog-btn', side: 'left', text: canHover ? 'Fog on or off. Point at it to set how thick.' : 'Fog on or off. Turn it on to set how thick.' },
+      { el: '#dark-map', side: 'left', text: "Switch the map's look any time." },
+      { el: '#phone-btn', side: 'right', text: 'The map on your phone: scan the code.', pc: true },
+      { el: null, side: 'center', text: `${verb} anything for its card: Guide me here puts an arrow in your game (F8 hides it). ${verb} the map to drop a pin.` },
+    ].filter((n) => !n.pc || !phoneLayout.matches);
+    coachEl.innerHTML = notes.map((n, i) => `<p class="coach-note ${n.side}" data-coach="${i}">${esc(n.text)}</p>`).join('');
+    const placed = [];
+    notes.forEach((n, i) => {
+      const note = coachEl.querySelector(`[data-coach="${i}"]`);
+      const box = note.getBoundingClientRect();
+      let x;
+      let y;
+      if (n.el) {
+        const target = $(n.el);
+        if (target?.closest('#sidebar')) target.scrollIntoView({ block: 'center' }); // the side panel scrolls
+        const r = target?.getBoundingClientRect();
+        if (!r || !r.width || r.bottom < 0 || r.top > innerHeight) { note.remove(); return; }
+        if (n.side === 'left') { x = r.left - box.width - 14; y = r.top + r.height / 2 - box.height / 2; }
+        if (n.side === 'right') { x = r.right + 14; y = r.top + r.height / 2 - box.height / 2; }
+        if (n.side === 'below') { x = r.left + r.width / 2 - box.width / 2; y = r.bottom + 14; }
+      } else {
+        const m = mapEl.getBoundingClientRect();
+        x = m.left + m.width / 2 - box.width / 2;
+        y = m.top + m.height * (phoneLayout.matches ? 0.56 : 0.42) - box.height / 2; // on a phone, below the buttons' notes
+      }
+      x = Math.max(8, Math.min(innerWidth - box.width - 8, x));
+      y = Math.max(8, Math.min(innerHeight - box.height - 8, y));
+      for (const p of placed) {
+        if (x < p.x + p.w && p.x < x + box.width && y < p.y + p.h + 6 && p.y < y + box.height + 6) y = p.y + p.h + 6;
+      }
+      placed.push({ x, y, w: box.width, h: box.height });
+      note.style.left = `${Math.round(x)}px`;
+      note.style.top = `${Math.round(y)}px`;
+    });
+  }
+  function openWelcome() {
+    if (draft) endDraft();
+    if (selected) closeDetail();
+    if (!fogMenu.hidden) openFogMenu(false);
+    welcomeStep = 1;
+    welcomeEl.hidden = false;
+    renderWelcome();
+    welcomeCard.querySelector('[aria-checked="true"]')?.focus();
+  }
+  function closeWelcome() {
+    welcomeStep = 0;
+    welcomeEl.hidden = true;
+    renderCoach();
+    try { localStorage.setItem(WELCOME_KEY, '1'); } catch { /* storage blocked: it may show again */ }
+    savePrefs(); // from now on this device has settings, so the welcome doesn't come back by itself
+    if (heldToast) { const [msg, opts] = heldToast; heldToast = null; toast(msg, opts); }
+  }
+  function welcomeGo(step) {
+    welcomeStep = step;
+    renderWelcome();
+    welcomeCard.querySelector('.primary')?.focus();
+  }
+  welcomeCard.addEventListener('click', (e) => {
+    const mode = e.target.closest('[data-welcome-mode]')?.dataset.welcomeMode;
+    if (mode) { setMode(mode, { quiet: true }); return renderWelcome(); }
+    const look = e.target.closest('[data-welcome-look]')?.dataset.welcomeLook;
+    if (look) {
+      prefs.darkMap = look === 'dark';
+      savePrefs();
+      applyDarkMap();
+      return renderWelcome();
+    }
+    const fog = FOG_CHOICES.find(([key]) => key === e.target.closest('[data-welcome-fog]')?.dataset.welcomeFog);
+    if (fog) {
+      if (fog[2]) { prefs.fog = fog[2]; setFogOn(true); } else setFogOn(false);
+      return renderWelcome();
+    }
+    const act = e.target.closest('[data-welcome]')?.dataset.welcome;
+    if (act === 'next') welcomeGo(welcomeStep + 1);
+    if (act === 'back') welcomeGo(welcomeStep - 1);
+    if (act === 'skip' || act === 'done') closeWelcome();
+  });
+  // arrow keys move between the options of a step, like any radio group
+  welcomeCard.addEventListener('keydown', (e) => {
+    const group = e.target.closest('[role="radiogroup"]');
+    if (!group || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    const items = [...group.querySelectorAll('[role="radio"]')];
+    const next = items[(items.indexOf(e.target) + (e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length];
+    e.preventDefault();
+    next.click();
+    group.querySelectorAll('[role="radio"]')[items.indexOf(next)]?.focus();
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && welcomeStep) { e.stopImmediatePropagation(); closeWelcome(); } }, true);
+  let swipeFrom = null; // on a phone, a swipe down on the sheet closes it
+  welcomeCard.addEventListener('touchstart', (e) => { swipeFrom = e.touches[0] && { x: e.touches[0].clientX, y: e.touches[0].clientY }; }, { passive: true });
+  welcomeCard.addEventListener('touchend', (e) => {
+    const t = e.changedTouches[0];
+    if (swipeFrom && t && t.clientY - swipeFrom.y > 90 && Math.abs(t.clientX - swipeFrom.x) < 60) closeWelcome();
+    swipeFrom = null;
+  });
+  window.addEventListener('resize', () => { if (welcomeStep === 3) renderCoach(); });
+  onFoundChange = () => { if (welcomeStep === 1) renderWelcome(); }; // your saves fill in the count a moment after opening
+  $('#welcome-again').onclick = () => { closeDrawer(); openWelcome(); };
+  function maybeWelcome() {
+    let seen = false;
+    try { seen = !!localStorage.getItem(WELCOME_KEY); } catch { /* storage blocked */ }
+    if (firstVisit && !seen) openWelcome();
+  }
+
   renderSidebar();
   api('state')
     .then((s) => {
       store.online = true;
       applyState(s);
       api('update').then(applyUpdate).catch(() => {});
-      if (store.position && !cave) map.setView([store.position.y, store.position.x], -1); // the cave view zooms itself
+      // around you, about 1.2 km across the screen's short side (a phone at the zoom a PC opens at would show
+      // only a few hundred metres); the cave view zooms itself
+      const short = Math.min(map.getSize().x, map.getSize().y);
+      // (at once: an animated zoom shows the trail's canvas stretched until it's drawn again)
+      if (store.position && !cave) map.setView([store.position.y, store.position.x], Math.min(-1, Math.round(Math.log2(short / 1200) * 2) / 2), { animate: false });
       listen();
     })
     .catch(() => {
       store.online = false;
       applyState(readJSON(LOCAL_KEY));
-    });
+    })
+    .then(maybeWelcome);
 })();

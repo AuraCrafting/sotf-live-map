@@ -35,6 +35,25 @@ public sealed class MapServer
     private TcpListener _listener;
     private double _lastSave;
 
+    // Explore's fog: what you've seen of each world (ExploredGrid), in progress.json as worlds.<uid>.explored
+    // = { bits, upTo (the newest save time whose changed objects are in) }. The radii are roughly what you
+    // see around you; a changed object (a felled tree) is a spot you stood next to.
+    private const double SeeLive = 50, SeeSave = 60, SeeChanged = 45, SeeCamp = 70, SeeFound = 60;
+    private const int ExploredVersion = 3; // made again from history once when this goes up (2: bigger radii, older trail; 3: routes, start)
+    private const double RouteMax = 450, SeeRoute = 25, SeeStart = 120; // see RevealRoutes
+    private Dictionary<string, (double x, double z)> _crashSites; // "ocean crash site" -> where it is (the map's spawn points)
+    private readonly Dictionary<string, ExploredGrid> _explored = new();
+    private readonly HashSet<string> _exploredDirty = new();
+    private readonly Dictionary<string, ExploredGrid> _exploredUndo = new(); // per world, until Undo or the next reset
+    private Dictionary<long, Place> _places;                                 // the map's locations, for found ones
+    private readonly record struct Place(double X, double Y, bool Under, string Area, bool Entrance);
+    // ... and inside caves and bunkers: the cells of each one's outline you've seen, per world (CellSet), in
+    // progress.json as worlds.<uid>.explored.under = { "<area id>": bits }. Tunnels block the view, so less far.
+    private const double SeeUnder = 15, UnderClimb = 6; // metres around you, and up or down (caves have floors)
+    private List<UndergroundArea> _areas;
+    private readonly Dictionary<string, Dictionary<string, CellSet>> _under = new();
+    private readonly Dictionary<string, Dictionary<string, CellSet>> _underUndo = new(); // per world, the areas a reset cleared
+
     public MapServer(string webRoot, string dataDir, string savesDir, int port, bool localOnly, string importFile = null)
     {
         _web = Path.GetFullPath(webRoot);
@@ -184,14 +203,19 @@ public sealed class MapServer
         catch (IOException) { return; } // try again next start
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..16];
         var imported = _state["imported"] as JsonArray ?? new JsonArray();
-        if (imported.Any(n => n?.ToString() == hash))
+        // The trail is looked at on its own ("trail:<hash>"): earlier versions took the found markers and pins
+        // or nothing, and left the trail behind when your progress here was kept.
+        var trailKey = "trail:" + hash;
+        var done = imported.Any(n => n?.ToString() == hash);
+        var trailDone = imported.Any(n => n?.ToString() == trailKey);
+        if (done && trailDone)
             return;
 
         JsonObject old = null;
         try { old = JsonNode.Parse(text) is JsonObject o ? ToState(o) : null; }
         catch (Exception) { /* unreadable: nothing to import */ }
 
-        if (old != null && HasProgress(old) && !HasProgress(_state))
+        if (!done && old != null && HasProgress(old) && !HasProgress(_state))
         {
             if (File.Exists(_progressPath))
                 File.Copy(_progressPath, Path.Combine(Path.GetDirectoryName(_progressPath)!, "progress.before-import.json"), true);
@@ -205,8 +229,21 @@ public sealed class MapServer
             _state = old;
             Console.WriteLine($"  Imported your progress from the earlier version ({_importFile}).");
         }
+        else if (!trailDone && old?["trail"] is JsonArray { Count: > 0 } oldTrail)
+        {
+            // your progress here stays; where the earlier version saw you go is added to the trail
+            var before = Arr("trail").Count;
+            var trail = Arr("trail").Concat(oldTrail).Select(n => n!.Clone())
+                .GroupBy(n => $"{n["t"]}|{n["x"]}|{n["y"]}").Select(g => g.First())
+                .OrderBy(n => n["t"]?.GetValue<double>() ?? 0).ToArray();
+            _state["trail"] = new JsonArray(trail);
+            Console.WriteLine($"  Added {trail.Length - before} trail points from the earlier version ({_importFile}).");
+        }
         imported = _state["imported"] as JsonArray ?? new JsonArray();
-        imported.Add(hash);
+        if (!done)
+            imported.Add(hash);
+        if (!trailDone)
+            imported.Add(trailKey);
         _state["imported"] = imported;
         SaveProgress();
     }
@@ -237,6 +274,14 @@ public sealed class MapServer
     {
         if (_saveBlocked)
             return;
+        foreach (var world in _exploredDirty)
+        {
+            if (_explored.TryGetValue(world, out var grid))
+                ExploredNode(world)["bits"] = grid.ToBase64();
+            if (_under.ContainsKey(world))
+                ExploredNode(world)["under"] = UnderNode(world);
+        }
+        _exploredDirty.Clear();
         var tmp = _progressPath + ".tmp";
         File.WriteAllText(tmp, _state.ToJsonString());
         File.Move(tmp, _progressPath, true);
@@ -253,6 +298,385 @@ public sealed class MapServer
         if (worlds[world] is not JsonObject w)
             worlds[world] = w = new JsonObject { ["found"] = new JsonArray(), ["pins"] = new JsonArray() };
         return w;
+    }
+
+    // ---------- explored (Explore's fog) ----------
+
+    private JsonObject ExploredNode(string world)
+    {
+        var progress = Progress(world);
+        if (progress["explored"] is not JsonObject node)
+            progress["explored"] = node = new JsonObject { ["v"] = ExploredVersion, ["upTo"] = 0 };
+        return node;
+    }
+
+    /// <summary>
+    /// A world's explored grid. The first time (an older progress file, or a world started before this
+    /// version), it's made from everything the map knows of where you've been: the trail, every save, what
+    /// you changed in the world, your camps and the places you found. So it's right mid-playthrough.
+    /// </summary>
+    private ExploredGrid Explored(string world)
+    {
+        world ??= "default";
+        if (_explored.TryGetValue(world, out var grid))
+            return grid;
+        var saved = Progress(world)["explored"] as JsonObject;
+        if (saved?["bits"]?.ToString() is { Length: > 0 } bits && TryNum(saved["v"], out var v) && v >= ExploredVersion)
+            return _explored[world] = ExploredGrid.FromBase64(bits);
+        if (saved != null) // an older version's: made again from everything below (caves too)
+        {
+            Progress(world).Remove("explored");
+            _under.Remove(world);
+        }
+        grid = _explored[world] = new ExploredGrid();
+        var active = _active ?? ResolveActive();
+        foreach (var p in Arr("trail").OfType<JsonObject>())
+            if ((p["w"]?.ToString() is { } pw ? pw == world : world == active) && p["c"] == null
+                && TryNum(p["x"], out var tx) && TryNum(p["y"], out var tz))
+                grid.Reveal(tx, tz, SeeLive);
+        var saves = _saveList.Where(s => s.World == world).ToList();
+        foreach (var s in saves)
+            grid.Reveal(s.X, s.Z, SeeSave);
+        if (saves.LastOrDefault(s => s.HasWorldData) is { } withData)
+        {
+            foreach (var camp in withData.Camps.OfType<JsonObject>())
+                if (TryNum(camp["x"], out var cx) && TryNum(camp["y"], out var cz))
+                    grid.Reveal(cx, cz, SeeCamp);
+            RevealChanged(world, grid, withData, null);
+            if (CrashSiteOf(withData) is { } start) // where this world began: around its crash site
+                grid.Reveal(start.x, start.z, SeeStart);
+        }
+        foreach (var id in FoundIds(world))
+            if (Places().TryGetValue(id, out var place) && !place.Under)
+                grid.Reveal(place.X, place.Y, SeeFound);
+        _exploredDirty.Add(world);
+        return grid;
+    }
+
+    /// <summary>
+    /// The changed world objects of saves newer than the ones already in (see SaveWatcher.ChangedGroups): on a
+    /// cave's or bunker's floor they're seen there, anywhere else on the island.
+    /// </summary>
+    private void RevealChanged(string world, ExploredGrid grid, SaveInfo withData, List<int> cells, Dictionary<string, List<int>> under = null)
+    {
+        var node = ExploredNode(world);
+        TryNum(node["upTo"], out var upTo);
+        RevealRoutes(world, grid, withData, upTo, cells);
+        foreach (var (x, z, h) in ChangedPoints(withData, upTo))
+        {
+            if (OnUnderCells(x, z, h))
+                RevealUnder(world, x, z, h, under);
+            else
+                grid.Reveal(x, z, SeeChanged, cells);
+        }
+        var newest = upTo;
+        foreach (var g in (withData.History["changed"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
+            if (TryNum(g["t"], out var t))
+                newest = Math.Max(newest, t);
+        node["upTo"] = newest;
+    }
+
+    /// <summary>
+    /// Between two saves you went from one place to the next, but only the places are known: where you saved
+    /// and what you changed in that stretch. They're linked by the shortest set of straight links (a minimum
+    /// spanning tree over the stretch's places), and a corridor along each link of up to RouteMax clears the
+    /// fog, so the parts of one stretch aren't specks. The first stretch starts at the world's crash site.
+    /// </summary>
+    private void RevealRoutes(string world, ExploredGrid grid, SaveInfo withData, double after, List<int> cells)
+    {
+        var saves = _saveList.Where(s => s.World == world).OrderBy(s => s.Time).ToList();
+        foreach (var g in (withData.History["changed"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
+        {
+            if (!TryNum(g["t"], out var t) || t <= after)
+                continue;
+            var nodes = new List<(double x, double z)>();
+            var i = saves.FindIndex(s => Math.Abs(s.Time - t) < 0.01);
+            if (i > 0)
+                nodes.Add((saves[i - 1].X, saves[i - 1].Z));
+            else if (i == 0 && CrashSiteOf(withData) is { } start)
+                nodes.Add(start);
+            if (i >= 0)
+                nodes.Add((saves[i].X, saves[i].Z));
+            var cellsSeen = new HashSet<(int, int)>(); // 8 m apart is plenty for a route
+            if (g["p"] is JsonArray p)
+                for (var k = 0; k + 2 < p.Count; k += 3)
+                    if (TryNum(p[k], out var x) && TryNum(p[k + 1], out var z) && TryNum(p[k + 2], out var h)
+                        && !OnUnderCells(x, z, h) && cellsSeen.Add(((int)Math.Round(x / 8), (int)Math.Round(z / 8))))
+                        nodes.Add((x, z));
+            foreach (var (a, b) in SpanningTree(nodes))
+            {
+                var length = Math.Sqrt((a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z));
+                if (length > RouteMax)
+                    continue;
+                var steps = Math.Max(1, (int)Math.Ceiling(length / 10));
+                for (var s = 0; s <= steps; s++)
+                    grid.Reveal(a.x + (b.x - a.x) * s / steps, a.z + (b.z - a.z) * s / steps, SeeRoute, cells);
+            }
+        }
+    }
+
+    /// <summary>Prim's minimum spanning tree over points (each link once).</summary>
+    private static List<((double x, double z) a, (double x, double z) b)> SpanningTree(List<(double x, double z)> nodes)
+    {
+        var links = new List<((double x, double z) a, (double x, double z) b)>();
+        var n = nodes.Count;
+        if (n < 2)
+            return links;
+        var inside = new bool[n];
+        var best = new double[n];
+        var from = new int[n];
+        Array.Fill(best, double.MaxValue);
+        Array.Fill(from, -1);
+        best[0] = 0;
+        for (var step = 0; step < n; step++)
+        {
+            var u = -1;
+            for (var v = 0; v < n; v++)
+                if (!inside[v] && (u < 0 || best[v] < best[u]))
+                    u = v;
+            inside[u] = true;
+            if (from[u] >= 0)
+                links.Add((nodes[from[u]], nodes[u]));
+            for (var v = 0; v < n; v++)
+            {
+                if (inside[v])
+                    continue;
+                var d = (nodes[u].x - nodes[v].x) * (nodes[u].x - nodes[v].x) + (nodes[u].z - nodes[v].z) * (nodes[u].z - nodes[v].z);
+                if (d < best[v]) { best[v] = d; from[v] = u; }
+            }
+        }
+        return links;
+    }
+
+    /// <summary>The crash site this world started at (from its saves), where the map has it.</summary>
+    private (double x, double z)? CrashSiteOf(SaveInfo withData)
+    {
+        if (withData.History["crashSite"]?.ToString() is not { Length: > 0 } crash)
+            return null;
+        Places(); // reads the map's spawn points too
+        foreach (var (title, at) in _crashSites ?? new())
+            if (title.StartsWith(crash, StringComparison.OrdinalIgnoreCase))
+                return at;
+        return null;
+    }
+
+    private static IEnumerable<(double x, double z, double h)> ChangedPoints(SaveInfo withData, double after)
+    {
+        foreach (var g in (withData.History["changed"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
+        {
+            if (!TryNum(g["t"], out var t) || t <= after || g["p"] is not JsonArray p)
+                continue;
+            for (var k = 0; k + 2 < p.Count; k += 3)
+                if (TryNum(p[k], out var x) && TryNum(p[k + 1], out var z) && TryNum(p[k + 2], out var h))
+                    yield return (x, z, h);
+        }
+    }
+
+    // ---------- explored inside caves and bunkers ----------
+
+    private List<UndergroundArea> Areas() => _areas ??= UndergroundArea.Load(Path.Combine(_web, "data", "underground.js"));
+
+    /// <summary>
+    /// A world's seen cells of every cave and bunker. The first time, from history: your underground trail
+    /// steps, what you changed on a cave's floor, and what you found inside.
+    /// </summary>
+    private Dictionary<string, CellSet> Under(string world)
+    {
+        world ??= "default";
+        if (_under.TryGetValue(world, out var sets))
+            return sets;
+        sets = _under[world] = new Dictionary<string, CellSet>();
+        var node = ExploredNode(world);
+        var saved = node["under"] as JsonObject;
+        foreach (var a in Areas())
+            sets[a.Id] = saved?[a.Id]?.ToString() is { } bits ? CellSet.FromBase64(bits, a.Count) : new CellSet(a.Count);
+        if (saved != null)
+            return sets;
+        node["under"] = new JsonObject(); // made now; the bits go in when progress is saved
+        var active = _active ?? ResolveActive();
+        foreach (var p in Arr("trail").OfType<JsonObject>())
+            if ((p["w"]?.ToString() is { } pw ? pw == world : world == active) && p["c"] != null
+                && TryNum(p["x"], out var tx) && TryNum(p["y"], out var tz))
+                RevealUnder(world, tx, tz, TryNum(p["h"], out var th) ? th : null, null); // older steps have no height
+        if (_saveList.LastOrDefault(s => s.World == world && s.HasWorldData) is { } withData)
+            foreach (var (x, z, h) in ChangedPoints(withData, 0))
+                if (OnUnderCells(x, z, h))
+                    RevealUnder(world, x, z, h, null);
+        foreach (var id in FoundIds(world))
+            if (Places().TryGetValue(id, out var place))
+                RevealFoundUnder(world, place, null);
+        _exploredDirty.Add(world);
+        return sets;
+    }
+
+    /// <summary>Marks the outline cells within SeeUnder of a spot (and UnderClimb of its height, when known) as seen.</summary>
+    private void RevealUnder(string world, double x, double z, double? h, Dictionary<string, List<int>> into)
+    {
+        var sets = Under(world);
+        foreach (var a in Areas())
+        {
+            if (!a.Covers(x, z, SeeUnder))
+                continue;
+            var set = sets[a.Id];
+            foreach (var k in a.Near(x, z, h, SeeUnder, UnderClimb))
+                if (set.Set(k) && into != null)
+                {
+                    if (!into.TryGetValue(a.Id, out var list))
+                        into[a.Id] = list = new List<int>();
+                    list.Add(k);
+                }
+        }
+        _exploredDirty.Add(world);
+    }
+
+    /// <summary>Whether a spot is on a cave's or bunker's floor (not the ground above it).</summary>
+    private bool OnUnderCells(double x, double z, double h) => Areas().Any(a => a.Covers(x, z, 3) && a.Near(x, z, h, 2.5, 3).Any());
+
+    /// <summary>A place you found inside a cave or bunker: what's around it there (its entrances are on the surface).</summary>
+    private void RevealFoundUnder(string world, Place place, Dictionary<string, List<int>> into)
+    {
+        if (!place.Under || place.Entrance || Areas().FirstOrDefault(a => a.Id == place.Area) is not { } area)
+            return;
+        var floor = area.FloorAt(place.X, place.Y);
+        var set = Under(world)[area.Id];
+        foreach (var k in area.Near(place.X, place.Y, floor, SeeUnder, UnderClimb))
+            if (set.Set(k) && into != null)
+            {
+                if (!into.TryGetValue(area.Id, out var list))
+                    into[area.Id] = list = new List<int>();
+                list.Add(k);
+            }
+        _exploredDirty.Add(world);
+    }
+
+    /// <summary>Tells the open pages which cells of which caves a world just got, or (areas) their whole sets.</summary>
+    private void BroadcastUnder(string world, Dictionary<string, List<int>> cells, IEnumerable<string> areas = null)
+    {
+        foreach (var (id, list) in cells ?? new())
+            if (list.Count > 0)
+                Broadcast("exploredUnder", new JsonObject { ["world"] = world, ["area"] = id, ["cells"] = new JsonArray(list.Select(c => (JsonNode)c).ToArray()) });
+        foreach (var id in areas ?? Enumerable.Empty<string>())
+            Broadcast("exploredUnder", new JsonObject { ["world"] = world, ["area"] = id, ["bits"] = Under(world)[id].ToBase64() });
+    }
+
+    private JsonObject UnderNode(string world) => new(Under(world).Where(kv => kv.Value.Count > 0)
+        .Select(kv => KeyValuePair.Create(kv.Key, (JsonNode)kv.Value.ToBase64())));
+
+    private IEnumerable<long> FoundIds(string world) => (Progress(world)["found"] as JsonArray ?? new JsonArray())
+        .OfType<JsonValue>().Where(v => v.TryGetValue<long>(out _)).Select(v => v.GetValue<long>());
+
+    /// <summary>Tells the open pages which cells a world just got (or, with all, its whole grid).</summary>
+    private void BroadcastExplored(string world, List<int> cells, bool all = false)
+    {
+        if (!all && cells.Count == 0)
+            return;
+        _exploredDirty.Add(world);
+        Broadcast("explored", all
+            ? new JsonObject { ["world"] = world, ["bits"] = Explored(world).ToBase64() }
+            : new JsonObject { ["world"] = world, ["cells"] = new JsonArray(cells.Select(c => (JsonNode)c).ToArray()) });
+    }
+
+    /// <summary>The map's locations (web/data/locations.js), for where the places you found are.</summary>
+    private Dictionary<long, Place> Places()
+    {
+        if (_places != null)
+            return _places;
+        _places = new();
+        try
+        {
+            const string prefix = "window.SOTF_LOCATIONS = ";
+            var line = File.ReadLines(Path.Combine(_web, "data", "locations.js")).FirstOrDefault(l => l.StartsWith(prefix, StringComparison.Ordinal));
+            if (line == null || JsonNode.Parse(line[prefix.Length..].TrimEnd().TrimEnd(';')) is not JsonArray locations)
+                return _places;
+            foreach (var l in locations.OfType<JsonObject>())
+            {
+                if (l["c"]?.ToString() is "vehicle" || !TryNum(l["id"], out var id) || !TryNum(l["x"], out var x) || !TryNum(l["y"], out var y))
+                    continue;
+                // underground like the page says: "In a cave/bunker" tags, or inside an area and not its entrance
+                var tags = (l["g"] as JsonArray)?.Select(t => t?.ToString() ?? "") ?? Enumerable.Empty<string>();
+                var entrance = l["c"]?.ToString() is "cave" or "bunker" && l["g"] == null;
+                var under = tags.Any(t => t.Contains("cave", StringComparison.OrdinalIgnoreCase) || t.Contains("bunker", StringComparison.OrdinalIgnoreCase)
+                    || t.Contains("underground", StringComparison.OrdinalIgnoreCase)) || (l["a"] != null && !entrance);
+                _places[(long)id] = new Place(x, y, under, l["a"]?.ToString(), entrance);
+                if (l["c"]?.ToString() == "spawn" && l["t"]?.ToString() is { } title)
+                    (_crashSites ??= new())[title.ToLowerInvariant()] = (x, y);
+            }
+        }
+        catch (Exception)
+        {
+            // without the map's data, found places just don't clear fog
+        }
+        return _places;
+    }
+
+    /// <summary>
+    /// {world, area?}: fog again over one cave or bunker (area), or over the island and all of them (Undo brings
+    /// it back). Your trail stays as it is.
+    /// </summary>
+    private (int, JsonNode) ResetExplored(JsonNode data)
+    {
+        lock (_lock)
+        {
+            var world = WorldParam(data);
+            var area = data?["area"]?.ToString() is { Length: > 0 } a ? a : null;
+            var sets = Under(world);
+            if (area != null && !sets.ContainsKey(area))
+                return (400, Error("no such cave or bunker"));
+            var cleared = 0;
+            var undo = new Dictionary<string, CellSet>();
+            foreach (var id in area != null ? new[] { area } : sets.Keys.ToArray())
+            {
+                undo[id] = sets[id];
+                cleared += sets[id].Count;
+                sets[id] = new CellSet(Areas().First(x => x.Id == id).Count);
+            }
+            _underUndo[world] = undo;
+            if (area == null)
+            {
+                var old = Explored(world);
+                _exploredUndo[world] = old;
+                _explored[world] = new ExploredGrid();
+                cleared += old.Count;
+                BroadcastExplored(world, null, all: true);
+            }
+            else
+            {
+                _exploredUndo.Remove(world); // Undo now means this cave
+            }
+            _exploredDirty.Add(world);
+            BroadcastUnder(world, null, undo.Keys);
+            SaveProgress();
+            return (200, new JsonObject { ["ok"] = true, ["world"] = world, ["area"] = area, ["cleared"] = cleared });
+        }
+    }
+
+    /// <summary>Undo for the last reset: what you had, plus what you explored since.</summary>
+    private (int, JsonNode) RestoreExplored(JsonNode data)
+    {
+        lock (_lock)
+        {
+            var world = WorldParam(data);
+            var restored = 0;
+            if (_exploredUndo.Remove(world, out var old))
+            {
+                Explored(world).Add(old);
+                restored += old.Count;
+                BroadcastExplored(world, null, all: true);
+            }
+            if (_underUndo.Remove(world, out var undo))
+            {
+                var sets = Under(world);
+                foreach (var (id, set) in undo)
+                {
+                    sets[id].Add(set);
+                    restored += set.Count;
+                }
+                BroadcastUnder(world, null, undo.Keys);
+            }
+            _exploredDirty.Add(world);
+            SaveProgress();
+            return (200, new JsonObject { ["ok"] = true, ["world"] = world, ["restored"] = restored });
+        }
     }
 
     /// <summary>Sends an event to every open map page (for parts outside this class, like the update check).</summary>
@@ -301,6 +725,7 @@ public sealed class MapServer
                 ["found"] = progress["found"].Clone(), ["pins"] = progress["pins"].Clone(), ["target"] = progress["target"]?.Clone(),
                 ["encountered"] = List(progress, "encountered"), ["revealed"] = List(progress, "revealed"),
                 ["seen"] = List(progress, "seen"), ["probable"] = List(progress, "probable"), ["dismissed"] = List(progress, "dismissed"),
+                ["explored"] = Explored(g.Key).ToBase64(), ["exploredUnder"] = UnderNode(g.Key),
             });
         }
         // a world you're playing that has no save yet (or one that only has progress)
@@ -319,6 +744,7 @@ public sealed class MapServer
                 ["found"] = progress["found"].Clone(), ["pins"] = progress["pins"].Clone(), ["target"] = progress["target"]?.Clone(),
                 ["encountered"] = List(progress, "encountered"), ["revealed"] = List(progress, "revealed"),
                 ["seen"] = List(progress, "seen"), ["probable"] = List(progress, "probable"), ["dismissed"] = List(progress, "dismissed"),
+                ["explored"] = Explored(uid).ToBase64(), ["exploredUnder"] = UnderNode(uid),
             });
         }
         return new JsonArray(list.OrderByDescending(w => w["last"]!.GetValue<double>()).Select(w => (JsonNode)w).ToArray());
@@ -355,9 +781,37 @@ public sealed class MapServer
             var newest = saves.LastOrDefault();
             // progress from before worlds: it's all from the world you saved last
             var changed = MigrateLegacy(saves.LastOrDefault(s => s.World != null)?.World);
+            // trail points without a world (an earlier version's): the world of the save closest in time
+            var withWorld = saves.Where(s => s.World != null).ToList();
+            if (withWorld.Count > 0)
+                foreach (var p in Arr("trail").OfType<JsonObject>())
+                    if (p["w"] == null && TryNum(p["t"], out var pt))
+                    {
+                        p["w"] = withWorld.MinBy(s => Math.Abs(s.Time - pt))!.World;
+                        changed = true;
+                    }
 
             var seen = new HashSet<string>(Arr("seenSaves").Select(n => n?.ToString()));
-            foreach (var info in saves.Where(s => !seen.Contains(s.Key)))
+            var fresh = saves.Where(s => !seen.Contains(s.Key)).ToList();
+            // Explore's fog: where you saved, and what you changed in the world since the saves already in
+            foreach (var world in saves.Where(s => s.World != null).GroupBy(s => s.World))
+            {
+                var built = _explored.ContainsKey(world.Key)
+                    || (Progress(world.Key)["explored"] is JsonObject e && e["bits"] != null && TryNum(e["v"], out var ev) && ev >= ExploredVersion);
+                var grid = Explored(world.Key); // the first time, from all of history
+                if (!built)
+                    continue;
+                var cells = new List<int>();
+                var under = new Dictionary<string, List<int>>();
+                foreach (var info in fresh.Where(s => s.World == world.Key))
+                    grid.Reveal(info.X, info.Z, SeeSave, cells);
+                if (world.LastOrDefault(s => s.HasWorldData) is { } withData)
+                    RevealChanged(world.Key, grid, withData, cells, under);
+                BroadcastExplored(world.Key, cells);
+                BroadcastUnder(world.Key, under);
+            }
+            changed |= _exploredDirty.Count > 0;
+            foreach (var info in fresh)
             {
                 Arr("seenSaves").Add(info.Key);
                 Arr("trail").Add(new JsonObject
@@ -464,6 +918,8 @@ public sealed class MapServer
                 "/api/marks" => UpdateMarks(data),
                 "/api/trail/clear" => ClearTrail(data),
                 "/api/trail/restore" => RestoreTrail(data),
+                "/api/explored/reset" => ResetExplored(data),
+                "/api/explored/restore" => RestoreExplored(data),
                 "/api/position" => LivePosition(data),
                 "/api/target" => SetTarget(data),
                 "/api/update" => Updater?.Handle(data) ?? (400, Error("this copy of the map doesn't check for updates")),
@@ -498,6 +954,20 @@ public sealed class MapServer
             foreach (var i in ids.Select(n => n.GetValue<long>()))
                 if (add) found.Add(i); else found.Remove(i);
             progress["found"] = new JsonArray(found.Select(i => (JsonNode)i).ToArray());
+            if (add) // a place you found is a place you've been
+            {
+                var cells = new List<int>();
+                var under = new Dictionary<string, List<int>>();
+                foreach (var i in ids.Select(n => n.GetValue<long>()))
+                    if (Places().TryGetValue(i, out var place))
+                    {
+                        if (!place.Under)
+                            Explored(world).Reveal(place.X, place.Y, SeeFound, cells);
+                        RevealFoundUnder(world, place, under);
+                    }
+                BroadcastExplored(world, cells);
+                BroadcastUnder(world, under);
+            }
             SaveProgress();
             Broadcast("found", new JsonObject { ["world"] = world, ["found"] = progress["found"].Clone() });
             return (200, new JsonObject { ["world"] = world, ["found"] = progress["found"].Clone() });
@@ -678,6 +1148,21 @@ public sealed class MapServer
             if (data["tags"] is JsonArray tags)
                 pos["tags"] = Clean(tags, 64, "t", "c");
             _position = pos;
+            if (!cave) // the island's fog; caves and bunkers have their own
+            {
+                var cells = Explored(world).Reveal(x, z, SeeLive);
+                BroadcastExplored(world, cells);
+                if (cells.Count > 0 && Now() - _lastSave > 30)
+                    SaveProgress();
+            }
+            else
+            {
+                var cells = new Dictionary<string, List<int>>();
+                RevealUnder(world, x, z, h, cells);
+                BroadcastUnder(world, cells);
+                if (cells.Count > 0 && Now() - _lastSave > 30)
+                    SaveProgress();
+            }
 
             var trail = Arr("trail");
             JsonNode last = null; // this world's last step (the trail holds every world)

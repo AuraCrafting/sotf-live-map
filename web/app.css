@@ -441,7 +441,7 @@ body.dark-map .sotf-tiles { filter: brightness(.5) saturate(.7) contrast(1.1); }
 .cave-banner {
   position: fixed; z-index: 1000;
   top: calc(64px + var(--safe-t)); left: calc(var(--sidebar) + 12px);
-  display: flex; align-items: center; gap: 14px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; max-width: min(640px, calc(100% - var(--sidebar) - 90px));
   padding: 8px 8px 8px 14px; border-radius: 12px;
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 94%, transparent);
@@ -878,3 +878,123 @@ body:not(.dark-map) .leaflet-explored-pane canvas { filter: invert(1); } /* a pa
   body:not(.dark-map) .leaflet-explored-pane canvas { filter: invert(1) blur(3px); }
 }
 .switch[hidden] { display: none; }
+
+/* Explore's fog: one stretched canvas, made see-through by the Fog slider (its opacity) */
+.leaflet-fog-pane .fog-layer { image-rendering: auto; }
+#fog-btn[aria-pressed="true"] .off-slash { display: none; } /* off: the cloud is struck through */
+.fog-slider { display: flex; align-items: baseline; justify-content: space-between; font-size: 14px; }
+.fog-slider output { font: 600 14px var(--font-mono); color: var(--fg); }
+#fog-range { width: 100%; accent-color: var(--accent); min-height: 32px; margin: -6px 0 0; }
+.explored-stat {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 6px; margin: 0;
+  font-size: 13px; color: var(--muted);
+}
+.explored-stat[hidden] { display: none; }
+.explored-stat > span:first-child { font: 600 12px/1 var(--font-display); letter-spacing: .08em; text-transform: uppercase; }
+.explored-stat b { font: 500 15px var(--font-mono); color: var(--fg); }
+.explored-stat .bar { flex-basis: 100%; margin-top: 2px; }
+
+/* cave and bunker maps: the floor chips in the banner, the scale bar and north */
+.floor-chips {
+  flex-basis: 100%; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 0 6px 0 -4px; padding-bottom: 2px;
+}
+.floor-chips::-webkit-scrollbar { display: none; }
+.floor-chips[hidden] { display: none; }
+.floor-chips button {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  min-height: 32px; padding: 0 10px; border-radius: 16px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--fg); font: 600 13px var(--font-body); cursor: pointer;
+}
+.floor-chips button i { width: 10px; height: 10px; border-radius: 3px; }
+.floor-chips button[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.leaflet-marker-icon.other-floor { opacity: .22; }
+.cave-legend {
+  position: fixed; z-index: 1000; left: calc(var(--sidebar) + 14px); bottom: calc(18px + var(--safe-b));
+  display: none; align-items: center; gap: 12px; padding: 6px 10px; border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--line);
+  font: 600 12px var(--font-mono); color: var(--muted); pointer-events: none;
+}
+body.cave-mode .cave-legend { display: inline-flex; }
+.cave-legend .scale { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.cave-legend .scale i { display: block; height: 4px; border: 2px solid var(--muted); border-top: 0; min-width: 12px; }
+.cave-legend em { font-style: normal; }
+@media (max-width: 820px) {
+  .cave-legend { left: 12px; bottom: calc(84px + var(--safe-b)); }
+  .floor-chips { margin-right: 0; }
+}
+
+/* welcome: a panel over the map (which stays visible, so what you pick shows), a bottom sheet on phones */
+.welcome { position: fixed; inset: 0; z-index: 1900; display: grid; place-items: center; padding: 16px; background: rgba(5,8,6,.28); }
+.welcome[hidden] { display: none; }
+.welcome-card {
+  width: min(520px, 100%); max-height: calc(100vh - 32px); overflow: auto;
+  display: flex; flex-direction: column; gap: 14px; padding: 22px 22px 18px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 18px 60px rgba(0,0,0,.6);
+  animation: welcome-in .22s ease-out;
+}
+@keyframes welcome-in { from { opacity: 0; transform: translateY(10px); } }
+.welcome h2 { margin: 0; font: 700 22px/1.15 var(--font-display); letter-spacing: .02em; }
+.welcome-step { margin: 0 0 -6px; color: var(--muted); font: 600 12px var(--font-display); letter-spacing: .1em; text-transform: uppercase; }
+.welcome-note { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
+.welcome-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.welcome-option {
+  position: relative; display: flex; flex-direction: column; gap: 6px; text-align: left; min-height: 120px;
+  padding: 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel-2); color: var(--fg); cursor: pointer;
+  font: 14px/1.4 var(--font-body);
+}
+.welcome-option strong { font: 700 18px var(--font-display); letter-spacing: .03em; }
+.welcome-option span:not(.welcome-badge) { color: var(--muted); }
+.welcome-option[aria-checked="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.welcome-badge {
+  align-self: flex-start; padding: 2px 8px; border-radius: 999px; background: var(--accent); color: var(--accent-ink);
+  font: 700 11px var(--font-display); letter-spacing: .08em; text-transform: uppercase;
+}
+.welcome-chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.welcome-chips button {
+  min-height: 48px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel-2); color: var(--fg);
+  font: 600 15px var(--font-body); cursor: pointer;
+}
+.welcome-chips button[aria-checked="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.welcome-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.welcome-actions button { min-height: 44px; padding: 0 16px; }
+.welcome-actions .primary { min-width: 120px; }
+.welcome-option:focus-visible, .welcome-chips button:focus-visible, .welcome-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* the tour: the panel moves down, out of the way of the notes */
+.welcome.tour { place-items: end center; background: rgba(5,8,6,.18); }
+.coach { position: fixed; inset: 0; z-index: 1901; pointer-events: none; }
+.coach[hidden] { display: none; }
+.coach-note {
+  position: fixed; margin: 0; max-width: 230px; padding: 9px 12px; border-radius: 12px;
+  background: var(--accent); color: var(--accent-ink); font: 600 13.5px/1.35 var(--font-body);
+  box-shadow: 0 8px 26px rgba(0,0,0,.5); animation: welcome-in .25s ease-out;
+}
+.coach-note::after { content: ''; position: absolute; width: 10px; height: 10px; background: var(--accent); transform: rotate(45deg); }
+.coach-note.left::after { right: -5px; top: calc(50% - 5px); }
+.coach-note.right::after { left: -5px; top: calc(50% - 5px); }
+.coach-note.below::after { top: -5px; left: calc(50% - 5px); }
+.coach-note.center { max-width: 300px; text-align: center; }
+.coach-note.center::after { display: none; }
+@media (max-width: 820px) {
+  .welcome { place-items: end stretch; padding: 0; }
+  .welcome-card {
+    width: 100%; max-height: 88vh; border-radius: 20px 20px 0 0; border-bottom: 0;
+    padding: 20px 18px calc(16px + var(--safe-b));
+  }
+  .welcome-card::before { content: ''; align-self: center; width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: -8px 0 2px; }
+  .welcome-options { grid-template-columns: 1fr; }
+  .welcome-option { min-height: 0; }
+  .welcome-actions button { min-height: 48px; flex: 1; }
+  .coach-note { max-width: 200px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .welcome-card, .coach-note { animation: none; }
+}
+
+/* welcome, step 2: the rows, and the look chips' little previews */
+.welcome-row { display: flex; flex-direction: column; gap: 8px; }
+.welcome-row h3 { margin: 0; font: 600 13px var(--font-display); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.welcome-chips.two { grid-template-columns: repeat(2, 1fr); }
+.welcome-chips button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.look-swatch { width: 26px; height: 18px; border-radius: 5px; border: 1px solid var(--line); }
+.look-swatch.dark { background: linear-gradient(135deg, #1b2320 0 55%, #3a4a3e 55%); }
+.look-swatch.light { background: linear-gradient(135deg, #cfd8c4 0 55%, #8fa38a 55%); }

@@ -23,6 +23,8 @@ public sealed class SaveInfo
     public JsonObject History = new();
     /// <summary>Where the world isn't as it started: see <see cref="SaveWatcher.ReadChanged"/>.</summary>
     public List<(float x, float z, float h)> Changed = new();
+    /// <summary>The crash site the world started at, as GameState says ("ocean", "mountain", "forest").</summary>
+    public string CrashSite;
 
     public JsonObject ToPosition() => new()
     {
@@ -116,6 +118,9 @@ public sealed class SaveWatcher
                 newest.Vehicles = ReadVehicles(zip);
                 newest.History = ReadHistory(zip);
                 newest.History["changed"] = ChangedGroups(world.OrderBy(i => i.Time));
+                // where this world started: the crash site picked at the start (mountain, ocean or forest)
+                if (world.Select(i => i.CrashSite).FirstOrDefault(c => !string.IsNullOrEmpty(c)) is { } crash)
+                    newest.History["crashSite"] = crash;
                 newest.HasWorldData = true;
             }
             catch (Exception)
@@ -166,6 +171,7 @@ public sealed class SaveWatcher
             Time = DateTimeOffset.TryParse(game["SaveTime"]?.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var saved)
                 ? saved.ToUnixTimeMilliseconds() / 1000.0 : fileTime,
             Changed = ReadChanged(zip),
+            CrashSite = game["CrashSite"]?.ToString()?.ToLowerInvariant(),
         };
         return info;
     }

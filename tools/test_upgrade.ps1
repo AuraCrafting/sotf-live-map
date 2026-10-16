@@ -90,6 +90,11 @@ try {
     $s = Start-Map $data $saves
     Check 'your current progress is kept as it is' (((Found (World $s 'world-a')) -join ',') -eq '9')
     Check 'nothing is backed up or replaced' (-not (Test-Path "$data\progress.before-import.json"))
+    Check "the old version's trail is added to yours" (@($s.trail | Where-Object { $_.t -eq 100 -or $_.t -eq 200 }).Count -eq 2)
+    Check '... its points get the world of the save nearest in time' (@($s.trail | Where-Object { ($_.t -eq 100 -or $_.t -eq 200) -and $_.w }).Count -eq 2)
+    Stop-Map
+    $s = Start-Map $data $saves
+    Check '... and only once' (@($s.trail | Where-Object { $_.t -eq 100 }).Count -eq 1)
     Stop-Map
     Remove-Item $import -Force
 
@@ -245,6 +250,111 @@ try {
     Check 'a glider you put down is listed as yours, where you left it' ($mine.Count -eq 1 -and $mine[0].id -eq '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0' -and $mine[0].k -eq 'glider' -and $mine[0].x -eq -955.5 -and $mine[0].y -eq 840.25 -and $mine[0].heading -eq 270)
     Check 'one in your inventory (no position) and other dropped things are not' ($v.Count -eq 2)
     Stop-Map
+
+    Write-Host "`n16. Explore's fog: where you've been, kept apart from the trail"
+    New-Item -ItemType Directory -Force (Join-Path $App 'web\data') | Out-Null
+    Set-Content (Join-Path $App 'web\data\locations.js') -Encoding utf8 -Value @('// test data', 'window.SOTF_CATEGORIES = [];',
+        'window.SOTF_LOCATIONS = [{"id":7001,"c":"camp","t":"A camp","x":-1000,"y":-1000},{"id":7002,"c":"tool","t":"In a cave","x":1000,"y":1000,"g":["In a cave"]}];')
+    $es = Join-Path $T 'saves16'
+    New-Save $es '3000000005' 'world-e' 100 200 '2026-01-08T10:00:00+00:00' @{
+        'WorldObjectLocatorManagerSaveData.json' = Locators @((LocatorKey 300.9 80 -40.1))
+    }
+    $data = Join-Path $T 'data16'
+    Set-Json "$data\progress.json" ('{"worlds":{"world-e":{"found":[7001],"pins":[]}},"seenSaves":[],"trail":[' +
+        '{"x":-500,"y":500,"t":100,"s":"live","w":"world-e"},{"x":500,"y":-500,"t":101,"s":"live","w":"world-e","c":1}]}')
+    # bit j * 400 + i of the 10 m cell at (x, z), lowest bit first
+    function Cell($b64, [double]$x, [double]$z) { $b = [Convert]::FromBase64String($b64); $k = [int]([Math]::Floor(($z + 2000) / 10) * 400 + [Math]::Floor(($x + 2000) / 10)); [bool]($b[$k -shr 3] -band (1 -shl ($k -band 7))) }
+    function Cells($b64) { $n = 0; foreach ($b in [Convert]::FromBase64String($b64)) { $v = [int]$b; while ($v) { $n += $v -band 1; $v = $v -shr 1 } }; $n }
+    function Explored { (World (Invoke-RestMethod "$Base/api/state") 'world-e').explored }
+    $s = Start-Map $data $es
+    $e = (World $s 'world-e').explored
+    Check 'the first time it comes from history: the save, a trail step, a changed object, a found place' ((Cell $e 100 200) -and (Cell $e -500 500) -and (Cell $e 300 -40) -and (Cell $e -1000 -1000))
+    Check '... not from an underground step, nor from somewhere you never were' (-not (Cell $e 500 -500) -and -not (Cell $e 1500 1500))
+    $null = Post '/api/position' @{ x = 1200; y = 50; z = -1200; heading = 0; cave = $false; area = 0; world = 'world-e' }
+    $null = Post '/api/position' @{ x = -1200; y = 50; z = 1200; heading = 0; cave = $true; area = 64; world = 'world-e' }
+    $null = Post '/api/found' @{ ids = @(7002); found = $true; world = 'world-e' }
+    $e = Explored
+    Check 'a live step clears 50 m around you, but not underground' ((Cell $e 1200 -1200) -and (Cell $e 1240 -1200) -and -not (Cell $e 1270 -1200) -and -not (Cell $e -1200 1200))
+    Check 'finding something in a cave does not clear the island' (-not (Cell $e 1000 1000))
+    $n = Cells $e
+    $null = Post '/api/trail/clear' @{ world = 'world-e' }
+    Check 'clearing the trail keeps what you explored' ((Cells (Explored)) -eq $n)
+    $r = Post '/api/explored/reset' @{ world = 'world-e' }
+    Check 'Reset exploration puts the fog back' ($r.cleared -eq $n -and (Cells (Explored)) -eq 0)
+    $r = Post '/api/explored/restore' @{ world = 'world-e' }
+    Check '... and Undo brings it back' ($r.restored -eq $n -and (Cells (Explored)) -eq $n)
+    Stop-Map
+    $s = Start-Map $data $es
+    Check 'it is saved, and not made again from history' ((Cells (World $s 'world-e').explored) -eq $n)
+    $null = Post '/api/explored/reset' @{ world = 'world-e' }
+    Stop-Map
+    $s = Start-Map $data $es
+    Check 'after a reset, starting the map again does not bring the old explored area back' ((Cells (World $s 'world-e').explored) -eq 0)
+    Stop-Map
+
+    Write-Host "`n17. The fog inside caves and bunkers"
+    # a made-up cave: one corridor along z = -1450 from x = -1500 to -1400, with a floor at 10 m and one at 30 m
+    # over it. Cell k (0..50) is the lower floor at x = -1500 + 2k, cell 51 + k the upper one above it.
+    $cells = (@(0..50 | ForEach-Object { "[$(-1500 + 2 * $_),-1450,10]" }) + @(0..50 | ForEach-Object { "[$(-1500 + 2 * $_),-1450,30]" })) -join ','
+    Set-Content (Join-Path $App 'web\data\underground.js') -Encoding utf8 -Value @('// test data',
+        "window.SOTF_UNDERGROUND = [{`"id`":`"cave-t`",`"name`":`"Test cave`",`"kind`":`"cave`",`"cell`":2.0,`"bounds`":[-1500,-1450,-1400,-1450],`"y`":[10,30],`"cells`":[$cells]}];")
+    Set-Content (Join-Path $App 'web\data\locations.js') -Encoding utf8 -Value @('// test data', 'window.SOTF_CATEGORIES = [];',
+        'window.SOTF_LOCATIONS = [{"id":7003,"c":"tool","t":"In the test cave","x":-1420,"y":-1450,"g":["In a cave"],"a":"cave-t"}];')
+    $us = Join-Path $T 'saves17'
+    New-Save $us '3000000006' 'world-u' 0 0 '2026-01-09T10:00:00+00:00' @{
+        'WorldObjectLocatorManagerSaveData.json' = Locators @((LocatorKey -1410.2 30.2 -1450.1)) # something broken on the upper floor
+    }
+    $data = Join-Path $T 'data17'
+    Set-Json "$data\progress.json" ('{"worlds":{"world-u":{"found":[7003],"pins":[]}},"seenSaves":[],"trail":[' +
+        '{"x":-1490,"y":-1450,"h":10,"t":100,"s":"live","w":"world-u","c":1}]}')
+    function Bit($b64, [int]$k) { $b = [Convert]::FromBase64String($b64); [bool]($b[$k -shr 3] -band (1 -shl ($k -band 7))) }
+    function Under { (World (Invoke-RestMethod "$Base/api/state") 'world-u').exploredUnder.'cave-t' }
+    function IslandU { (World (Invoke-RestMethod "$Base/api/state") 'world-u').explored }
+    $s = Start-Map $data $us
+    $u = (World $s 'world-u').exploredUnder.'cave-t'
+    Check 'the first time it comes from history: an underground trail step, on its own floor only' ((Bit $u 5) -and -not (Bit $u 56))
+    Check '... what you found inside, around it' (Bit $u 40)
+    Check '... and a changed object on the upper floor, there and not on the island above' ((Bit $u 95) -and -not (Cell (World $s 'world-u').explored -1410 -1450))
+    $null = Post '/api/position' @{ x = -1460; y = 30; z = -1450; heading = 0; cave = $true; area = 2; world = 'world-u' }
+    $u = Under
+    Check 'underground, a live step clears about 15 m around you, on your floor' ((Bit $u 71) -and (Bit $u 78) -and -not (Bit $u 79) -and -not (Bit $u 20))
+    $null = Post '/api/position' @{ x = -1436; y = 60; z = -1450; heading = 0; cave = $false; area = 0; world = 'world-u' }
+    Check 'walking over the cave on the surface clears the island, not the cave under it' ((Cell (IslandU) -1436 -1450) -and -not (Bit (Under) 32) -and -not (Bit (Under) 83))
+    $n = 0; foreach ($k in 0..101) { if (Bit (Under) $k) { $n++ } }
+    $island = Cells (World (Invoke-RestMethod "$Base/api/state") 'world-u').explored
+    $r = Post '/api/explored/reset' @{ world = 'world-u'; area = 'cave-t' }
+    Check 'Reset exploration for one cave clears just that cave' ($r.cleared -eq $n -and -not (Bit (Under) 5) -and (Cells (World (Invoke-RestMethod "$Base/api/state") 'world-u').explored) -eq $island)
+    $null = Post '/api/explored/restore' @{ world = 'world-u' }
+    Check '... and Undo brings it back' ((Bit (Under) 5) -and (Bit (Under) 71))
+    $null = Post '/api/explored/reset' @{ world = 'world-u' }
+    Check 'Reset everything clears the island and the caves' (-not (Bit (Under) 5) -and (Cells (World (Invoke-RestMethod "$Base/api/state") 'world-u').explored) -eq 0)
+    Stop-Map
+
+    Write-Host "`n18. Where the world started, and the way between the places of one stretch"
+    Set-Content (Join-Path $App 'web\data\locations.js') -Encoding utf8 -Value @('// test data', 'window.SOTF_CATEGORIES = [];',
+        'window.SOTF_LOCATIONS = [{"id":2,"c":"spawn","t":"Ocean Crash Site","x":500,"y":500}];')
+    $rs = Join-Path $T 'saves18'
+    New-Save $rs '3000000007' 'world-r' 0 0 '2026-01-10T10:00:00+00:00' @{
+        'GameStateSaveData.json' = Wrap 'GameState' @{ SaveTime = '2026-01-10T10:00:00+00:00'; GameDays = 3; GameType = 'Normal'; CrashSite = 'ocean' }
+        # one stretch: two felled trees 200 m apart (linked), and two 600 m apart (too far to link)
+        'WorldObjectLocatorManagerSaveData.json' = Locators @((LocatorKey 100 50 0), (LocatorKey 300 50 0), (LocatorKey 1000 50 -1000), (LocatorKey 1600 50 -1000))
+    }
+    $s = Start-Map (Join-Path $T 'data18') $rs
+    $w = World $s 'world-r'
+    Check 'the world remembers its crash site' ($w.history.crashSite -eq 'ocean')
+    Check 'about 120 m around it is explored' ((Cell $w.explored 500 500) -and (Cell $w.explored 600 500) -and -not (Cell $w.explored 650 500))
+    Check 'places of one stretch up to 450 m apart are linked by a corridor' (Cell $w.explored 200 0)
+    Check '... further apart they are not' (-not (Cell $w.explored 1300 -1000))
+    Stop-Map
+
+    Write-Host "`n16b. An explored area from an earlier build is made again from history"
+    $data = Join-Path $T 'data16b'
+    $zeros = [Convert]::ToBase64String((New-Object byte[] 20000))
+    Set-Json "$data\progress.json" ('{"worlds":{"world-e":{"found":[],"pins":[],"explored":{"v":1,"upTo":0,"bits":"' + $zeros + '"}}},"seenSaves":[],"trail":[]}')
+    $s = Start-Map $data $es
+    Check 'made again from the saves (version 1 had smaller circles)' (Cell (World $s 'world-e').explored 100 200)
+    Stop-Map
+    Check '... and saved as the current version (3)' ((Read-Json "$data\progress.json").worlds.'world-e'.explored.v -eq 3)
 }
 finally {
     Stop-Map

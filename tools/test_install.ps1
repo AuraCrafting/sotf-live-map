@@ -72,13 +72,15 @@ function Summary($worldProgress) {
     "found [$found] pins [$pins] target $target"
 }
 function Point($p) { "$($p.t)|$($p.x)|$($p.y)" }
-function Compare-Trail($before, $after, $label) {
+# $fromOld: the old Python map's trail, which is added to yours (where you went before this version)
+function Compare-Trail($before, $after, $label, $fromOld = @()) {
     $have = @{}; foreach ($p in $after) { $have[(Point $p)] = $p }
     $missing = @($before | Where-Object { -not $have.ContainsKey((Point $_)) })
     $beforeKeys = @{}; foreach ($p in $before) { $beforeKeys[(Point $p)] = 1 }
+    $oldKeys = @{}; foreach ($p in $fromOld) { $oldKeys[(Point $p)] = 1 }
     $extra = @($after | Where-Object { -not $beforeKeys.ContainsKey((Point $_)) })
-    $note = if ($extra.Count) { " (+$($extra.Count) from saves made since)" } else { ' (identical)' }
-    Check "$label trail: $(@($before).Count) points before, $(@($after).Count) after$note" ($missing.Count -eq 0 -and @($extra | Where-Object { $_.s -ne 'save' }).Count -eq 0)
+    $note = if ($extra.Count) { " (+$($extra.Count) from saves made since or the old map)" } else { ' (identical)' }
+    Check "$label trail: $(@($before).Count) points before, $(@($after).Count) after$note" ($missing.Count -eq 0 -and @($extra | Where-Object { $_.s -ne 'save' -and -not $oldKeys.ContainsKey((Point $_)) }).Count -eq 0)
 }
 $cfgOther = "[SomeOtherMod]`nSetting = 1`n"
 
@@ -118,8 +120,10 @@ try {
         $label = $w.Name.Substring(0, [Math]::Min(8, $w.Name.Length))
         if (-not $after) { Check "world $label is on the map" $false; continue }
         Check "world ${label}: $(Summary $w.Value)" ((Summary $w.Value) -eq (Summary $after))
-        Compare-Trail @($before.trail | Where-Object { $_.w -eq $w.Name }) @($s.trail | Where-Object { $_.w -eq $w.Name }) "world $label"
+        Compare-Trail @($before.trail | Where-Object { $_.w -eq $w.Name }) @($s.trail | Where-Object { $_.w -eq $w.Name }) "world $label" @((Read-Json $LegacyProgress).trail)
     }
+    $have = @{}; foreach ($p in $s.trail) { $have[(Point $p)] = 1 }
+    Check "the old Python map's trail is added to yours" (@((Read-Json $LegacyProgress).trail | Where-Object { -not $have.ContainsKey((Point $_)) }).Count -eq 0)
     Check 'the old Python file did not replace your progress' ((Summary ($before.worlds.PSObject.Properties | Select-Object -First 1).Value) -eq (Summary (World $s ($before.worlds.PSObject.Properties | Select-Object -First 1).Name)))
     Stop-Map
     Check 'your progress moved to "SOTF Live Map", the old folder is gone' ((Test-Path "$local\SOTF Live Map\progress.json") -and (Test-Path "$local\SOTF Live Map\progress.before-import.json") -and -not (Test-Path "$local\SOTF Field Map"))

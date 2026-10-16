@@ -11,6 +11,14 @@ Underground, it switches to the cave or bunker you're in.
   (Maintenance Card ← needs Shovel). Where something is stays hidden until you ask for it with a red
   **Show location (spoiler)** button. *Guide* shows every location. Switch with the slider in the top bar
   (tap or slide it); going to Guide asks first, and coming back to Explore is one tap and changes nothing.
+- **Fog over what you haven't explored.** In Explore, mist covers the island except where you've been:
+  about 50 m around you as you play, where you saved, what you changed in the world, your camps and the
+  places you found. It fills in from your saves (and an earlier version's trail) on the first start. The
+  **Fog** button on the right turns it on or off (on in Explore, off in Guide until you turn it on); point at
+  it (or turn it on, on a phone) to set how thick it is (it starts thin), see how much of the island you've
+  explored, or put the fog back over everything (with Undo). Clearing your trail doesn't touch it. Caves and bunkers have fog of
+  their own: in their view, the tunnels you haven't been through are misty or hidden, the banner says how
+  much of that cave you've explored, and you can reset just that one. Walking over a cave doesn't count.
 - **Your history from your saves.** Items you carry that have only one spot on the map, the places the
   game itself marks as found, and your zip lines count as found or visited, so the map knows where you've
   been from the first start. The trail keeps your height: walking over a bunker isn't being inside it.
@@ -27,7 +35,10 @@ Underground, it switches to the cave or bunker you're in.
 - **Your GPS markers.** Trackers you placed and tracker darts, as the in-game GPS shows them. The GPS's own
   markers are named by what they are (Cave, GPS locator, ...), and a cave your GPS shows counts as known.
 - **Cave and bunker view.** When you go underground, the island goes dark and the map shows that cave's
-  tunnels and only the items inside it. The tunnel outlines are read from the game's own files.
+  tunnels and only the items inside it. The outlines are read from the game's own files and drawn as a
+  plan: each floor in its own colour, ramps and shafts in grey, walls, a 10 m grid, a scale bar and north.
+  Chips in the banner show one floor at a time (the others, and their items, fade); underground, the
+  floor you're on is picked for you.
 - **Your camps.** Everything you've built, grouped by place, with a list of what's there.
 - **Parked vehicles.** Golf carts, Knight Vs and hang gliders at the spot where you left them. In Explore
   the map shows only the ones you've moved or come close to; Guide shows all of them. A glider you fold up
@@ -52,6 +63,9 @@ Underground, it switches to the cave or bunker you're in.
 - **Phone and tablet layouts.** On a phone, a tap opens a small card with **Guide me here** and **Mark as
   found** right under your thumb; swipe it up for the details. Also dark mode, search, filters, and offline
   use from the last save.
+- **A short welcome.** The first time you open the map on a device, it asks how you want to play (Explore or
+  Guide), dark or light, and how much fog, and shows where the controls are. Skip it at any step; **Show welcome again** in
+  the side panel brings it back.
 
 ## Install
 
