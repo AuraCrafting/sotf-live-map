@@ -54,7 +54,7 @@ as BBCode, ready to paste.
 [list=1]
 [*]Download the zip and unzip it anywhere.
 [*]Double-click [b]Install.bat[/b]. It finds the game through Steam (or asks for the folder), installs MelonLoader if needed, and puts the mod in [i]Mods\SOTFLiveMap.dll[/i] and the map in [i]<game>\SOTFLiveMap\[/i]. It also adds a desktop shortcut.
-[*]Start the game through Steam. The map opens in your browser by itself. The first start with MelonLoader takes a few extra minutes.
+[*]Start the game as you normally do. The map opens in your browser by itself. The first start with MelonLoader takes a few extra minutes.
 [/list]
 [b]Phone:[/b] same Wi-Fi as your PC, open the map menu, tap [i]Open on phone[/i] and scan the code. Allow [i]SOTF Live Map.exe[/i] when Windows Firewall asks.
 [b]Vortex / mod managers:[/b] not supported. Use Install.bat.

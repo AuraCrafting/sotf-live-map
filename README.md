@@ -63,7 +63,7 @@ Underground, it switches to the cave or bunker you're in.
    - checks for the .NET 6 runtime that MelonLoader needs, and offers to install it,
    - installs the mod (`Mods\SOTFLiveMap.dll`) and the map (`<game>\SOTFLiveMap\`),
    - adds a **SOTF Live Map** shortcut to your desktop.
-3. Start the game through Steam. The map opens in your browser by itself.
+3. Start the game as you normally do. The map opens in your browser by itself.
    - The very first start with MelonLoader takes a few extra minutes, because it prepares the game files once.
 
 **On your phone:** connect to the same Wi-Fi as your PC, open the map menu and tap **Open on phone**, then

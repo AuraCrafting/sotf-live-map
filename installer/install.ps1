@@ -336,7 +336,7 @@ Say "Desktop shortcut: $Name"
 Move-FirewallRule
 
 Step 'Done!'
-Say 'Start Sons of the Forest through Steam. The map opens by itself in your browser.'
+Say 'Start Sons of the Forest as you normally do. The map opens by itself in your browser.'
 if ($installMelon) {
     Say 'The first start with MelonLoader takes a few extra minutes (it prepares the game files once).' Yellow
 }
