@@ -1,5 +1,9 @@
 # Third-party notices
 
+The MIT license in [LICENSE](LICENSE) covers the code in this repository (src/, web/app.js, web/app.css,
+web/index.html, installer/, build/, tools/). Map tiles, icons, screenshots and location data are covered by
+the notices below.
+
 ## Sons of the Forest map, by Leon Machens
 
 Map tiles (`web/tiles`), icons (`web/icons`), screenshots (`web/screenshots`) and the original location
