@@ -770,7 +770,7 @@ public sealed class MapServer
     {
         [".html"] = "text/html; charset=utf-8", [".js"] = "text/javascript; charset=utf-8", [".css"] = "text/css; charset=utf-8",
         [".json"] = "application/json", [".webp"] = "image/webp", [".png"] = "image/png", [".jpg"] = "image/jpeg",
-        [".svg"] = "image/svg+xml", [".ico"] = "image/x-icon", [".txt"] = "text/plain; charset=utf-8",
+        [".svg"] = "image/svg+xml", [".ico"] = "image/x-icon", [".txt"] = "text/plain; charset=utf-8", [".woff2"] = "font/woff2",
     };
 
     // The page's text files, kept gzipped in memory (they're read on every page load; about 620 KB, 150 KB zipped).

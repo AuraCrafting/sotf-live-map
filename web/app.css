@@ -1,4 +1,16 @@
 /* Layout: full-bleed map with a field-kit sidebar (drawer on phones); one dark theme by design. */
+
+/* Fonts: the Latin files Google Fonts serves, bundled so the page needs no internet (SIL OFL 1.1, see fonts/OFL.txt).
+   Source Sans 3 is one variable font for all three weights, as Google serves it. */
+@font-face { font-family: "Saira Condensed"; font-weight: 500; font-display: swap; src: url(fonts/saira-condensed-500.woff2) format("woff2"); }
+@font-face { font-family: "Saira Condensed"; font-weight: 600; font-display: swap; src: url(fonts/saira-condensed-600.woff2) format("woff2"); }
+@font-face { font-family: "Saira Condensed"; font-weight: 700; font-display: swap; src: url(fonts/saira-condensed-700.woff2) format("woff2"); }
+@font-face { font-family: "Source Sans 3"; font-weight: 400; font-display: swap; src: url(fonts/source-sans-3.woff2) format("woff2"); }
+@font-face { font-family: "Source Sans 3"; font-weight: 600; font-display: swap; src: url(fonts/source-sans-3.woff2) format("woff2"); }
+@font-face { font-family: "Source Sans 3"; font-weight: 700; font-display: swap; src: url(fonts/source-sans-3.woff2) format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 400; font-display: swap; src: url(fonts/ibm-plex-mono-400.woff2) format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 500; font-display: swap; src: url(fonts/ibm-plex-mono-500.woff2) format("woff2"); }
+
 :root {
   --bg: #101412;
   --panel: #151b17;

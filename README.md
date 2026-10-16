@@ -96,7 +96,7 @@ Your progress is kept unless you choose to delete it. The game's own files are n
   sends nothing about you or your game (GitHub sees your IP address, as with any website). Switch it off
   with **Check for updates** at the bottom of the map menu, or `CheckForUpdates = false` under `[LiveMap]`.
   Other downloads: the release zip when you press **Update**, MelonLoader during install, and the files
-  MelonLoader fetches on its first start. The map page also loads its fonts from Google Fonts.
+  MelonLoader fetches on its first start.
 
 ## Troubleshooting
 
@@ -170,6 +170,9 @@ The project is laid out like this:
   [Sons of the Forest map](https://github.com/lmachens/sons-of-the-forest-map) by Leon Machens (MIT).
 - [Leaflet](https://leafletjs.com) (BSD-2-Clause), [QRCode.js](https://github.com/davidshimjs/qrcodejs) (MIT),
   and [MelonLoader](https://github.com/LavaGang/MelonLoader) (Apache-2.0; downloaded by the installer, not bundled).
+- Fonts: [IBM Plex Mono](https://github.com/IBM/plex) by IBM, [Saira Condensed](https://github.com/Omnibus-Type/Saira)
+  by The Saira Project Authors and [Source Sans 3](https://github.com/adobe-fonts/source-sans) by Adobe
+  (all SIL Open Font License 1.1), bundled in `web/fonts`.
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
