@@ -1292,10 +1292,72 @@ public sealed class MapServer
         }
     }
 
+    private const double PickReach = 6, PickClimb = 4; // metres from where you stood (you pick things up within reach)
+    private Dictionary<int, List<long>> _itemSpots; // the game's item id -> the map's locations of it (data/items.js)
+
+    private Dictionary<int, List<long>> ItemSpots()
+    {
+        if (_itemSpots != null)
+            return _itemSpots;
+        _itemSpots = new();
+        try
+        {
+            const string prefix = "window.SOTF_ITEMS = ";
+            var line = File.ReadLines(Path.Combine(_web, "data", "items.js")).FirstOrDefault(l => l.StartsWith(prefix, StringComparison.Ordinal));
+            if (line != null && JsonNode.Parse(line[prefix.Length..].TrimEnd().TrimEnd(';')) is JsonObject items)
+                foreach (var (loc, item) in items)
+                    if (long.TryParse(loc, out var id) && TryNum(item, out var itemId))
+                        (_itemSpots.TryGetValue((int)itemId, out var list) ? list : _itemSpots[(int)itemId] = new List<long>()).Add(id);
+        }
+        catch (Exception)
+        {
+            // without it, picking things up just doesn't mark them
+        }
+        return _itemSpots;
+    }
+
+    /// <summary>
+    /// got [[item id, how many], ...]: items you just picked up (the mod sees your inventory's counts go up).
+    /// The map's nearest spot of that item within PickReach of you, on your level (in a cave, on your floor),
+    /// and not found yet, is marked found. An item with no spot that close (one you crafted, or took out of
+    /// a box at your base) marks nothing: better a spot left unmarked than the wrong one marked.
+    /// </summary>
+    private void MarkPickedUp(string world, double x, double z, double h, bool underground, JsonArray got)
+    {
+        var found = new HashSet<long>(FoundIds(world));
+        var ids = new List<long>();
+        foreach (var entry in got.OfType<JsonArray>())
+        {
+            if (entry.Count < 1 || !TryNum(entry[0], out var item) || !ItemSpots().TryGetValue((int)item, out var spots))
+                continue;
+            long best = 0;
+            var bestDistance = PickReach;
+            foreach (var id in spots)
+            {
+                if (found.Contains(id) || ids.Contains(id) || !Places().TryGetValue(id, out var place) || place.Under != underground)
+                    continue;
+                var d = Math.Sqrt((place.X - x) * (place.X - x) + (place.Y - z) * (place.Y - z));
+                if (d > bestDistance)
+                    continue;
+                if (place.Under && Areas().FirstOrDefault(a => a.Id == place.Area)?.FloorAt(place.X, place.Y) is { } floor && Math.Abs(floor - h) > PickClimb)
+                    continue; // another floor of the cave
+                best = id;
+                bestDistance = d;
+            }
+            if (best != 0)
+                ids.Add(best);
+        }
+        if (ids.Count == 0)
+            return;
+        UpdateFound(new JsonObject { ["ids"] = new JsonArray(ids.Select(i => (JsonNode)i).ToArray()), ["found"] = true, ["world"] = world });
+        Broadcast("pickedUp", new JsonObject { ["world"] = world, ["ids"] = new JsonArray(ids.Select(i => (JsonNode)i).ToArray()) });
+    }
+
     /// <summary>
     /// Live feed from the game mod: {x, y, z} game coordinates (y = height), heading in degrees,
     /// cave (bool), area (the game's area mask), world (the loaded world's id), save {mode, id} (the
-    /// loaded slot), difficulty, others (companions and other players) and tags (GPS markers).
+    /// loaded slot), difficulty, others (companions and other players), tags (GPS markers) and got (items
+    /// you just picked up, see MarkPickedUp).
     /// </summary>
     private (int, JsonNode) LivePosition(JsonNode data)
     {
@@ -1327,6 +1389,8 @@ public sealed class MapServer
             if (data["tags"] is JsonArray tags)
                 pos["tags"] = Clean(tags, 64, "t", "c");
             _position = pos;
+            if (data["got"] is JsonArray got)
+                MarkPickedUp(world, x, z, h, cave, got);
             if (!cave) // the island's fog; caves and bunkers have their own
             {
                 var cells = Explored(world).Reveal(x, z, SeeLive);

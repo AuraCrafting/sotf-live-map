@@ -36,6 +36,10 @@ Underground, it switches to the cave or bunker you're in.
   marked **Probably found here**, with one tap to confirm it or to say it wasn't there.
 - **Live position.** You, with the direction you're facing, updated twice a second and gliding smoothly
   between updates. "Follow me" keeps you in the middle of the map.
+- **Picked up, marked found.** When you pick something up in the game, its spot on the map is marked found
+  right away, without saving first: the mod sees the item arrive in your inventory, and the map marks that
+  item's spot within a few metres of you, on your level (in a cave, on your floor). In Explore and Guide.
+  Something with no spot that close (crafted, or out of a box at your base) marks nothing.
 - **Kelvin and Virginia.** Their live positions, with names. In Explore, Virginia shows once you've met her
   (she came close, or your save says she has come to see you).
 - **Co-op friends.** Other players are shown the same way as you, in their own colour and with their name.

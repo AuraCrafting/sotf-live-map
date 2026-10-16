@@ -3094,8 +3094,12 @@
     return `${Math.round(s / 86400)} d ago`;
   }
   let toastTimer;
-  function toast(msg, { action, onAction, ms = 2800 } = {}) {
+  let toastKeepUntil = 0; // a toast that others wait for (something you just found), until then
+  function toast(msg, { action, onAction, ms = 2800, keep = false } = {}) {
     if (welcomeStep) { heldToast = [msg, { action, onAction, ms }]; return; } // after the welcome, not under it
+    const wait = toastKeepUntil - performance.now();
+    if (!keep && wait > 0) { setTimeout(() => toast(msg, { action, onAction, ms }), wait); return; }
+    if (keep) toastKeepUntil = performance.now() + ms;
     const el = $('#toast');
     el.textContent = msg;
     if (action) {
@@ -3428,7 +3432,15 @@
       LOCS.forEach((l) => paintMarker(l.id));
       applyFilters();
       renderSidebar();
+      renderUnlock(); // a key item picked up live ticks off what it opens straight away
       if (selected) renderDetail();
+    });
+    // something you just picked up in the game, marked found right there (the 'found' event updates the map)
+    es.addEventListener('pickedUp', (e) => {
+      const msg = JSON.parse(e.data);
+      if (store.view && msg.world !== store.view) return; // no game on screen yet: the map is about to show this one
+      const names = msg.ids.map((id) => BY_ID.get(id)).filter(Boolean).map((l) => nice(l.t));
+      if (names.length) toast(`Found: ${names.join(', ')}`, { keep: true, ms: 3500 });
     });
     es.addEventListener('pins', (e) => {
       const msg = JSON.parse(e.data);

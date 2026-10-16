@@ -426,6 +426,30 @@ try {
     Check '... once' (@((Read-Json "$data\progress.json").imported | Where-Object { $_ -like 'explored:*' }).Count -eq 1)
     Remove-Item $import -Force
 
+    Write-Host "`n20. Picking an item up, live, marks its spot found"
+    Set-Content (Join-Path $App 'web\data\locations.js') -Encoding utf8 -Value @('// test data', 'window.SOTF_CATEGORIES = [];',
+        ('window.SOTF_LOCATIONS = [{"id":9001,"c":"tool","t":"A tool","x":100,"y":100},{"id":9002,"c":"tool","t":"The same tool","x":300,"y":100},' +
+         '{"id":9003,"c":"tool","t":"A tool in the cave","x":-1490,"y":-1450,"g":["In a cave"],"a":"cave-t"}];'))
+    Set-Content (Join-Path $App 'web\data\items.js') -Encoding utf8 -Value @('// test data', 'window.SOTF_ITEMS = {"9001":501,"9002":501,"9003":502};')
+    $data = Join-Path $T 'data20'
+    Set-Json "$data\progress.json" '{"worlds":{"world-p":{"found":[],"pins":[]}},"seenSaves":[],"trail":[]}'
+    $s = Start-Map $data $noSaves
+    function Got([double]$x, [double]$h, [double]$z, $cave, $items) { Post '/api/position' @{ x = $x; y = $h; z = $z; heading = 0; cave = $cave; area = 0; world = 'world-p'; got = $items } | Out-Null }
+    function FoundP { @((World (Invoke-RestMethod "$Base/api/state") 'world-p').found) }
+    Got 103 10 100 $false @(, @(501, 1))
+    Check 'an item you pick up marks its spot right there found' ((FoundP) -contains 9001 -and -not ((FoundP) -contains 9002))
+    Got 150 10 100 $false @(, @(501, 1))
+    Check '... one with no spot within a few metres marks nothing (crafted, or from a box)' ((FoundP).Count -eq 1)
+    Got -1490 30 -1450 $true @(, @(502, 1))
+    Check '... in a cave, not on another floor' (-not ((FoundP) -contains 9003))
+    Got -1491 10.5 -1450 $true @(, @(502, 1))
+    Check '... but on your floor' ((FoundP) -contains 9003)
+    Got 300 10 100 $true @(, @(501, 1))
+    Check '... and not on the island while you are underground' (-not ((FoundP) -contains 9002))
+    Stop-Map
+    Check '... and it is saved' (@((Read-Json "$data\progress.json").worlds.'world-p'.found).Count -eq 2)
+    Remove-Item (Join-Path $App 'web\data\items.js')
+
     Write-Host "`n16b. An explored area from an earlier build is made again from history"
     $data = Join-Path $T 'data16b'
     $zeros = [Convert]::ToBase64String((New-Object byte[] 20000))

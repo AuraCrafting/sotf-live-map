@@ -17,7 +17,7 @@ namespace LiveMap;
 
 /// <summary>
 /// Feeds the SOTF Live Map: your live position and heading, whether you're in a cave or bunker,
-/// Kelvin and Virginia, other players in co-op, and your in-game GPS markers.
+/// Kelvin and Virginia, other players in co-op, your in-game GPS markers, and the items you just picked up.
 /// Read-only: no Harmony patches, no console commands or cheats, no game settings, nothing in saves,
 /// nothing sent over the game's network.
 /// </summary>
@@ -157,6 +157,7 @@ public class LiveMapMod : MelonMod
         AppendSave(extras);
         _world.AppendOthers(extras);
         _world.AppendTags(extras);
+        _world.AppendGained(extras, now);
         var extrasJson = extras.ToString();
 
         float dx = pos.x - _lastX, dy = pos.y - _lastY, dz = pos.z - _lastZ;

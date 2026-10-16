@@ -4,6 +4,7 @@ using Il2Cpp;
 using Il2CppEndnight.Utilities;
 using Il2CppSons.Ai.Vail;
 using Il2CppSons.Gameplay.GPS;
+using Il2CppTheForest.Utils;
 using UnityEngine;
 
 namespace LiveMap;
@@ -185,6 +186,60 @@ internal sealed class WorldReader
             if (!string.IsNullOrWhiteSpace(text)) sb.Append(",\"t\":").Append(Str(text));
             sb.Append('}');
         }
+    }
+
+    // ---------- items you just got ----------
+
+    private const float GainSettle = 10f; // seconds after entering a world: the inventory is filled from the save
+    private const int GainKinds = 3;      // more kinds at once is a storage box or a save, not a pickup
+    private readonly Dictionary<int, int> _counts = new();
+    private float _countsSince = float.NegativeInfinity;
+    private float _lastCounted = float.NegativeInfinity;
+
+    /// <summary>
+    /// The items whose count in your inventory went up since the last sample, as ,"got":[[item id, how many],...],
+    /// so the map can mark the one you just picked up as found. Read only (the game's own item counts).
+    /// </summary>
+    public void AppendGained(StringBuilder sb, float now)
+    {
+        Guard("your inventory", () => Gained(sb, now));
+    }
+
+    private void Gained(StringBuilder sb, float now)
+    {
+        if (now - _lastCounted > 2f) // just entered a world (or came back from a menu): start counting again
+        {
+            _counts.Clear();
+            _countsSince = now;
+        }
+        _lastCounted = now;
+        var inventory = LocalPlayer.Inventory;
+        var items = inventory ? inventory._itemInstanceManager : null;
+        var map = items?._itemsMap;
+        if (map == null)
+            return;
+        var gained = new List<(int id, int n)>();
+        var seen = new HashSet<int>();
+        var e = map.GetEnumerator();
+        while (e.MoveNext())
+        {
+            var id = e.Current.Key;
+            var count = items.GetItemCount(id);
+            seen.Add(id);
+            if (_counts.TryGetValue(id, out var was) && count > was)
+                gained.Add((id, count - was));
+            else if (!_counts.ContainsKey(id) && _counts.Count > 0 && count > 0)
+                gained.Add((id, count)); // a kind you didn't have yet
+            _counts[id] = count;
+        }
+        foreach (var id in _counts.Keys.Where(k => !seen.Contains(k)).ToList())
+            _counts[id] = 0;
+        if (now - _countsSince < GainSettle || gained.Count == 0 || gained.Count > GainKinds)
+            return;
+        sb.Append(",\"got\":[");
+        for (var k = 0; k < gained.Count; k++)
+            sb.Append(k > 0 ? "," : "").Append('[').Append(gained[k].id).Append(',').Append(gained[k].n).Append(']');
+        sb.Append(']');
     }
 
     // ---------- JSON helpers ----------
