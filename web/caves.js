@@ -8,7 +8,8 @@
 //            shows no floor chips for it
 //   layers   per floor (and one for the ramps and shafts), the cells with the gaps between them filled:
 //            grown by a cell in every direction, then shrunk back from the four sides (three cells for
-//            caves, which are sampled much more sparsely than bunkers)
+//            caves outlined from their objects, which are sampled much more sparsely; a cave drawn from
+//            its real floor is as dense as a bunker)
 //   floorOf  the floor of each outline cell (-1: ramps and shafts)
 // Heights are smoothed first: each cell takes the median of the cells within two steps of it that are on
 // about its level (or of all of them, for one on its own like that ceiling).
@@ -147,7 +148,9 @@
     }
 
     // 4. per floor, the gaps filled
-    const r = area.kind === 'bunker' ? 1 : 3;
+    // three cells for caves outlined from their objects (sparse); a cave's real floor ("v": 2) is dense like a
+    // bunker's, and more would join corridors a wall apart into one room
+    const r = area.kind === 'bunker' || (area.v || 1) > 1 ? 1 : 3;
     const layers = [];
     let gx0 = Infinity; let gz0 = Infinity; let gx1 = -Infinity; let gz1 = -Infinity;
     for (let f = -1; f < floors.length; f++) {
