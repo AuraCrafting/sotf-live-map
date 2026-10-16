@@ -39,8 +39,10 @@ public sealed class MapServer
     // = { bits, upTo (the newest save time whose changed objects are in) }. The radii are roughly what you
     // see around you; a changed object (a felled tree) is a spot you stood next to.
     private const double SeeLive = 50, SeeSave = 60, SeeChanged = 45, SeeCamp = 70, SeeFound = 60;
-    private const int ExploredVersion = 3; // made again from history once when this goes up (2: bigger radii, older trail; 3: routes, start)
-    private const double RouteMax = 450, SeeRoute = 25, SeeStart = 120; // see RevealRoutes
+    // made again from history once when this goes up, keeping what was explored (2: bigger radii, older trail;
+    // 3: routes, start; 4: vehicles you moved)
+    private const int ExploredVersion = 4;
+    private const double RouteMax = 450, SeeRoute = 25, SeeStart = 120; // see RevealRoutes, RevealStart
     private Dictionary<string, (double x, double z)> _crashSites; // "ocean crash site" -> where it is (the map's spawn points)
     private readonly Dictionary<string, ExploredGrid> _explored = new();
     private readonly HashSet<string> _exploredDirty = new();
@@ -206,9 +208,11 @@ public sealed class MapServer
         // The trail is looked at on its own ("trail:<hash>"): earlier versions took the found markers and pins
         // or nothing, and left the trail behind when your progress here was kept.
         var trailKey = "trail:" + hash;
+        var exploredKey = "explored:" + hash;
         var done = imported.Any(n => n?.ToString() == hash);
         var trailDone = imported.Any(n => n?.ToString() == trailKey);
-        if (done && trailDone)
+        var exploredDone = imported.Any(n => n?.ToString() == exploredKey);
+        if (done && trailDone && exploredDone)
             return;
 
         JsonObject old = null;
@@ -239,13 +243,60 @@ public sealed class MapServer
             _state["trail"] = new JsonArray(trail);
             Console.WriteLine($"  Added {trail.Length - before} trail points from the earlier version ({_importFile}).");
         }
+        // Explore's fog ("explored:<hash>"): what the earlier file had explored stays explored here too
+        if (!exploredDone && old?["worlds"] is JsonObject oldWorlds)
+            foreach (var (world, p) in oldWorlds)
+                if (p?["explored"] is JsonObject e && !ReferenceEquals(_state, old))
+                    AddExplored(world, e);
         imported = _state["imported"] as JsonArray ?? new JsonArray();
         if (!done)
             imported.Add(hash);
         if (!trailDone)
             imported.Add(trailKey);
+        if (!exploredDone)
+            imported.Add(exploredKey);
         _state["imported"] = imported;
         SaveProgress();
+    }
+
+    /// <summary>
+    /// Adds another progress file's explored cells (island and caves) to a world's, before its grid is loaded.
+    /// A world without a grid yet gets one made from history at first use, with these cells in it.
+    /// </summary>
+    private void AddExplored(string world, JsonObject from)
+    {
+        var p = Progress(world);
+        if (p["explored"] is not JsonObject node)
+            p["explored"] = node = new JsonObject { ["v"] = 0, ["upTo"] = 0 };
+        if (from["bits"]?.ToString() is { Length: > 0 } bits)
+        {
+            var grid = node["bits"]?.ToString() is { Length: > 0 } mine ? ExploredGrid.FromBase64(mine) : new ExploredGrid();
+            var before = grid.Count;
+            grid.Add(ExploredGrid.FromBase64(bits));
+            node["bits"] = grid.ToBase64();
+            if (grid.Count > before)
+                Console.WriteLine($"  Added {grid.Count - before} explored cells from the earlier version ({_importFile}).");
+        }
+        if (from["under"] is JsonObject under)
+        {
+            var to = node["under"] as JsonObject ?? new JsonObject();
+            foreach (var (id, b) in under)
+            {
+                byte[] theirs, ours;
+                try
+                {
+                    theirs = Convert.FromBase64String(b?.ToString() ?? "");
+                    ours = to[id]?.ToString() is { } o ? Convert.FromBase64String(o) : new byte[theirs.Length];
+                }
+                catch (FormatException) { continue; }
+                if (ours.Length != theirs.Length)
+                    continue; // another build's outline of that cave: leave it
+                for (var k = 0; k < ours.Length; k++)
+                    ours[k] |= theirs[k];
+                to[id] = Convert.ToBase64String(ours);
+            }
+            node["under"] = to;
+        }
     }
 
     /// <summary>Progress from before worlds existed goes to the given world (the newest save's, or the one being played).</summary>
@@ -314,6 +365,8 @@ public sealed class MapServer
     /// A world's explored grid. The first time (an older progress file, or a world started before this
     /// version), it's made from everything the map knows of where you've been: the trail, every save, what
     /// you changed in the world, your camps and the places you found. So it's right mid-playthrough.
+    /// An older version's grid is made again the same way, and what it had stays explored: its trail may have
+    /// been reset since, and fog never comes back by itself.
     /// </summary>
     private ExploredGrid Explored(string world)
     {
@@ -323,8 +376,13 @@ public sealed class MapServer
         var saved = Progress(world)["explored"] as JsonObject;
         if (saved?["bits"]?.ToString() is { Length: > 0 } bits && TryNum(saved["v"], out var v) && v >= ExploredVersion)
             return _explored[world] = ExploredGrid.FromBase64(bits);
+        ExploredGrid had = null;
+        JsonObject hadUnder = null;
         if (saved != null) // an older version's: made again from everything below (caves too)
         {
+            if (saved["bits"]?.ToString() is { Length: > 0 } old)
+                had = ExploredGrid.FromBase64(old);
+            hadUnder = saved["under"] as JsonObject;
             Progress(world).Remove("explored");
             _under.Remove(world);
         }
@@ -337,20 +395,81 @@ public sealed class MapServer
         var saves = _saveList.Where(s => s.World == world).ToList();
         foreach (var s in saves)
             grid.Reveal(s.X, s.Z, SeeSave);
-        if (saves.LastOrDefault(s => s.HasWorldData) is { } withData)
+        var withData = saves.LastOrDefault(s => s.HasWorldData);
+        if (withData != null)
         {
             foreach (var camp in withData.Camps.OfType<JsonObject>())
                 if (TryNum(camp["x"], out var cx) && TryNum(camp["y"], out var cz))
                     grid.Reveal(cx, cz, SeeCamp);
             RevealChanged(world, grid, withData, null);
-            if (CrashSiteOf(withData) is { } start) // where this world began: around its crash site
-                grid.Reveal(start.x, start.z, SeeStart);
         }
         foreach (var id in FoundIds(world))
             if (Places().TryGetValue(id, out var place) && !place.Under)
                 grid.Reveal(place.X, place.Y, SeeFound);
+        if (had != null)
+            grid.Add(had);
+        if (hadUnder != null)
+        {
+            var sets = Under(world); // made from history now
+            foreach (var a in Areas())
+                if (hadUnder[a.Id]?.ToString() is { } b)
+                    sets[a.Id].Add(CellSet.FromBase64(b, a.Count));
+        }
+        if (withData != null)
+            RevealStart(grid, withData, null);
         _exploredDirty.Add(world);
         return grid;
+    }
+
+    /// <summary>
+    /// Where this world began: around its crash site (its saves say which one). How you got from there to the
+    /// rest is only known from the trail; without one, Explore's fog brush lets you paint the way yourself.
+    /// </summary>
+    private void RevealStart(ExploredGrid grid, SaveInfo withData, List<int> cells)
+    {
+        if (CrashSiteOf(withData) is { } start)
+            grid.Reveal(start.x, start.z, SeeStart, cells);
+    }
+
+    private const int PaintMax = 40000; // cells in one paint request (a big brush stroke is a few thousand)
+
+    /// <summary>
+    /// {world, cells, on}: Explore's fog brush. on (the default) clears the fog from those cells (bit j * 400 + i,
+    /// see ExploredGrid), false puts it back, for places you were before the map knew, or ones it got wrong.
+    /// </summary>
+    private (int, JsonNode) PaintExplored(JsonNode data)
+    {
+        if (data?["cells"] is not JsonArray list || list.Count > PaintMax
+            || list.Any(n => n is not JsonValue v || !v.TryGetValue<int>(out var k) || k < 0 || k >= ExploredGrid.Size * ExploredGrid.Size))
+            return (400, Error($"cells must be a list of up to {PaintMax} cell numbers"));
+        var on = data["on"] is not JsonValue ov || !ov.TryGetValue<bool>(out var b) || b;
+        lock (_lock)
+        {
+            var world = WorldParam(data);
+            var grid = Explored(world);
+            var changed = new List<int>();
+            foreach (var k in list.Select(n => n.GetValue<int>()))
+                if (grid.Set(k, on))
+                    changed.Add(k);
+            if (changed.Count > 0)
+            {
+                if (on)
+                    BroadcastExplored(world, changed);
+                else
+                    BroadcastExplored(world, null, all: true); // pages only add cells; a removal sends the whole grid
+                SaveProgress();
+            }
+            return (200, new JsonObject { ["ok"] = true, ["world"] = world, ["changed"] = changed.Count });
+        }
+    }
+
+    /// <summary>Clears SeeRoute either side of the straight line from a to b.</summary>
+    private static void Corridor(ExploredGrid grid, (double x, double z) a, (double x, double z) b, List<int> cells)
+    {
+        var length = Math.Sqrt((a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z));
+        var steps = Math.Max(1, (int)Math.Ceiling(length / 10));
+        for (var s = 0; s <= steps; s++)
+            grid.Reveal(a.x + (b.x - a.x) * s / steps, a.z + (b.z - a.z) * s / steps, SeeRoute, cells);
     }
 
     /// <summary>
@@ -398,20 +517,15 @@ public sealed class MapServer
             if (i >= 0)
                 nodes.Add((saves[i].X, saves[i].Z));
             var cellsSeen = new HashSet<(int, int)>(); // 8 m apart is plenty for a route
-            if (g["p"] is JsonArray p)
-                for (var k = 0; k + 2 < p.Count; k += 3)
-                    if (TryNum(p[k], out var x) && TryNum(p[k + 1], out var z) && TryNum(p[k + 2], out var h)
-                        && !OnUnderCells(x, z, h) && cellsSeen.Add(((int)Math.Round(x / 8), (int)Math.Round(z / 8))))
-                        nodes.Add((x, z));
+            foreach (var key in new[] { "p", "v" }) // what you changed, and where you moved a vehicle
+                if (g[key] is JsonArray p)
+                    for (var k = 0; k + 2 < p.Count; k += 3)
+                        if (TryNum(p[k], out var x) && TryNum(p[k + 1], out var z) && TryNum(p[k + 2], out var h)
+                            && !OnUnderCells(x, z, h) && cellsSeen.Add(((int)Math.Round(x / 8), (int)Math.Round(z / 8))))
+                            nodes.Add((x, z));
             foreach (var (a, b) in SpanningTree(nodes))
-            {
-                var length = Math.Sqrt((a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z));
-                if (length > RouteMax)
-                    continue;
-                var steps = Math.Max(1, (int)Math.Ceiling(length / 10));
-                for (var s = 0; s <= steps; s++)
-                    grid.Reveal(a.x + (b.x - a.x) * s / steps, a.z + (b.z - a.z) * s / steps, SeeRoute, cells);
-            }
+                if ((a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z) <= RouteMax * RouteMax)
+                    Corridor(grid, a, b, cells);
         }
     }
 
@@ -460,15 +574,18 @@ public sealed class MapServer
         return null;
     }
 
+    /// <summary>Where you changed something, and where you moved a vehicle, in saves newer than after.</summary>
     private static IEnumerable<(double x, double z, double h)> ChangedPoints(SaveInfo withData, double after)
     {
         foreach (var g in (withData.History["changed"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
         {
-            if (!TryNum(g["t"], out var t) || t <= after || g["p"] is not JsonArray p)
+            if (!TryNum(g["t"], out var t) || t <= after)
                 continue;
-            for (var k = 0; k + 2 < p.Count; k += 3)
-                if (TryNum(p[k], out var x) && TryNum(p[k + 1], out var z) && TryNum(p[k + 2], out var h))
-                    yield return (x, z, h);
+            foreach (var key in new[] { "p", "v" })
+                if (g[key] is JsonArray p)
+                    for (var k = 0; k + 2 < p.Count; k += 3)
+                        if (TryNum(p[k], out var x) && TryNum(p[k + 1], out var z) && TryNum(p[k + 2], out var h))
+                            yield return (x, z, h);
         }
     }
 
@@ -720,6 +837,9 @@ public sealed class MapServer
                 ["modes"] = new JsonArray(saves.Select(s => s.Mode).Distinct().Select(m => (JsonNode)m).ToArray()),
                 ["started"] = saves[0].Time, ["last"] = newest.Time, ["day"] = newest.Day, ["saves"] = saves.Count,
                 ["label"] = newest.Label, ["mode"] = newest.Mode,
+                // every save, newest first, for "look at a save" (a co-op host's save is in both of its folders)
+                ["saveList"] = new JsonArray(saves.AsEnumerable().Reverse().GroupBy(s => (s.Time, Math.Round(s.X), Math.Round(s.Z)))
+                    .Select(d => (JsonNode)d.First().ToPosition()).ToArray()),
                 ["camps"] = withData?.Camps.Clone() ?? new JsonArray(), ["vehicles"] = withData?.Vehicles.Clone() ?? new JsonArray(),
                 ["history"] = withData?.History.Clone() ?? new JsonObject(),
                 ["found"] = progress["found"].Clone(), ["pins"] = progress["pins"].Clone(), ["target"] = progress["target"]?.Clone(),
@@ -806,7 +926,10 @@ public sealed class MapServer
                 foreach (var info in fresh.Where(s => s.World == world.Key))
                     grid.Reveal(info.X, info.Z, SeeSave, cells);
                 if (world.LastOrDefault(s => s.HasWorldData) is { } withData)
+                {
                     RevealChanged(world.Key, grid, withData, cells, under);
+                    RevealStart(grid, withData, cells); // a world the map saw before its first save
+                }
                 BroadcastExplored(world.Key, cells);
                 BroadcastUnder(world.Key, under);
             }
@@ -920,6 +1043,7 @@ public sealed class MapServer
                 "/api/trail/restore" => RestoreTrail(data),
                 "/api/explored/reset" => ResetExplored(data),
                 "/api/explored/restore" => RestoreExplored(data),
+                "/api/explored/paint" => PaintExplored(data),
                 "/api/position" => LivePosition(data),
                 "/api/target" => SetTarget(data),
                 "/api/update" => Updater?.Handle(data) ?? (400, Error("this copy of the map doesn't check for updates")),

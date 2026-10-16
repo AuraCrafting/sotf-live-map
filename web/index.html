@@ -48,6 +48,7 @@
     <section class="mine">
       <h2>Your map</h2>
       <label class="world-pick" hidden><span>World</span><select id="world-pick" aria-label="World to show"></select></label>
+      <button class="text-btn choose-save" id="choose-save" hidden>Look at a save…</button>
       <label class="switch"><input type="checkbox" id="show-trail" checked><span>Show where I've been</span></label>
       <label class="switch"><input type="checkbox" id="auto-mark" checked><span>Auto-mark places I visit</span></label>
       <div id="pin-list"></div>
@@ -130,7 +131,25 @@
     <label class="fog-slider" for="fog-range"><span>How thick</span><output id="fog-value" for="fog-range"></output></label>
     <input type="range" id="fog-range" min="10" max="100" step="5" aria-label="Fog: how thick">
     <p class="trail-count" id="fog-note"></p>
+    <button class="secondary fog-brush-btn" id="fog-brush" hidden>Fog brush: paint where you've been</button>
     <div class="trail-reset" id="fog-reset"></div>
+  </div>
+
+  <div class="draft-bar brush-bar" id="brush-bar" role="dialog" aria-label="Fog brush" hidden>
+    <p class="draft-hint" id="brush-hint"></p>
+    <div class="brush-chips two" role="radiogroup" aria-label="What the brush does">
+      <button role="radio" data-brush-mode="clear">Clear fog</button>
+      <button role="radio" data-brush-mode="fog">Add fog</button>
+    </div>
+    <div class="brush-chips" role="radiogroup" aria-label="Brush size">
+      <button role="radio" data-brush-size="25">Small</button>
+      <button role="radio" data-brush-size="50">Medium</button>
+      <button role="radio" data-brush-size="100">Large</button>
+    </div>
+    <div class="draft-actions">
+      <button class="secondary" data-brush="undo">Undo</button>
+      <button class="primary" data-brush="done">Done</button>
+    </div>
   </div>
 
   <div class="draft-bar" id="draft-bar" role="dialog" aria-label="New pin" hidden>
@@ -166,6 +185,18 @@
     <div class="welcome-card" id="welcome-card" role="dialog" aria-labelledby="welcome-title"></div>
   </div>
   <div class="coach" id="coach" hidden></div>
+  <div class="welcome" id="world-choose" hidden>
+    <div class="welcome-card" role="dialog" aria-labelledby="choose-title">
+      <h2 id="choose-title">Pick a save to see its map</h2>
+      <p class="start-wait" role="status"><span class="wait-dot" aria-hidden="true"></span><span><strong>Waiting for the game…</strong>
+        Load a save in Sons of the Forest and the map follows you as you play.</span></p>
+      <div class="choose-list" id="choose-list"></div>
+      <div class="welcome-actions">
+        <button class="text-btn" data-choose="more" id="choose-more" hidden></button>
+        <button class="secondary" data-choose="wait">Just the map</button>
+      </div>
+    </div>
+  </div>
 
   <div id="toast" role="status" hidden></div>
 </div>

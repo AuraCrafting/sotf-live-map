@@ -1,4 +1,4 @@
-<#
+﻿<#
   Upgrade test for the map app: progress from earlier versions must come through intact.
 
     powershell -ExecutionPolicy Bypass -File tools\test_upgrade.ps1
@@ -347,6 +347,61 @@ try {
     Check '... further apart they are not' (-not (Cell $w.explored 1300 -1000))
     Stop-Map
 
+    Write-Host "`n19. Vehicles you moved, the crash site, the fog brush, Virginia, and a rebuild that keeps what was explored"
+    Set-Content (Join-Path $App 'web\data\locations.js') -Encoding utf8 -Value @('// test data', 'window.SOTF_CATEGORIES = [];',
+        'window.SOTF_LOCATIONS = [{"id":2,"c":"spawn","t":"Ocean Crash Site","x":-1500,"y":1500}];')
+    function Vehicles($list) { Wrap 'WorldItemManager' @{ WorldItemStates = @($list | ForEach-Object { @{ ObjectNameId = $_[0]; ItemId = $_[1]; Position = @{ x = $_[2]; y = 50; z = $_[3] }; Rotation = @{ x = 0; y = 0; z = 0 } } }) } }
+    $vs = Join-Path $T 'saves19'
+    New-Save $vs '3000000008' 'world-v' 0 0 '2026-01-11T10:00:00+00:00' @{
+        'GameStateSaveData.json' = Wrap 'GameState' @{ SaveTime = '2026-01-11T10:00:00+00:00'; GameDays = 3; GameType = 'Normal'; CrashSite = 'ocean' }
+        'WorldItemManagerSaveData.json' = Vehicles (@(, @('World.GolfCart.01', 0, -1000, 1000)) + @(, @('World.KnightV.01', 630, 800, -800)))
+    }
+    New-Save $vs '3000000009' 'world-v' 0 0 '2026-01-12T10:00:00+00:00' @{
+        'GameStateSaveData.json' = Wrap 'GameState' @{ SaveTime = '2026-01-12T10:00:00+00:00'; GameDays = 4; GameType = 'Normal'; CrashSite = 'ocean' }
+        # the cart driven away, the Knight V settled half a metre, a glider put down
+        'WorldItemManagerSaveData.json' = Vehicles (@(, @('World.GolfCart.01', 0, 400, 400)) + @(, @('World.KnightV.01', 630, 800.5, -800)) + @(, @('0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0', 626, -300, 900)))
+        # Virginia has come to see you twice
+        'SaveData.json' = Wrap 'VailWorldSim' @{ WorldEventData = @{ WorldEventTypeStats = @(@{ Name = 'Virginia Short'; RunCount = 1 }, @{ Name = 'Virginia Long'; RunCount = 1 }, @{ Name = 'Chopper'; RunCount = 3 }) } }
+    }
+    $data = Join-Path $T 'data19'
+    # an earlier build's grid with one cell nothing in history explains (its trail was reset since), and a cave cell
+    $old = New-Object byte[] 20000; $k = 30 * 400 + 370; $old[$k -shr 3] = [byte](1 -shl ($k -band 7)) # the cell at (1700, -1700)
+    $oldUnder = [Convert]::ToBase64String([byte[]](@([byte]1) + (New-Object byte[] 12)))
+    Set-Json "$data\progress.json" ('{"worlds":{"world-v":{"found":[],"pins":[],"explored":{"v":3,"upTo":0,"bits":"' + [Convert]::ToBase64String($old) +
+        '","under":{"cave-t":"' + $oldUnder + '"}}}},"seenSaves":[],"trail":[]}')
+    $s = Start-Map $data $vs
+    $w = World $s 'world-v'
+    Check 'a rebuild keeps what was explored before, on the island and in caves' ((Cell $w.explored 1700 -1700) -and (Bit $w.exploredUnder.'cave-t' 0))
+    Check 'a golf cart you moved: where it stood and where you left it' ((Cell $w.explored -1000 1000) -and (Cell $w.explored 400 400))
+    Check '... a vehicle that only settled says nothing' (-not (Cell $w.explored 800 -800))
+    Check '... and a glider you put down is where you were' (Cell $w.explored -300 900)
+    Check 'they come with the save they were seen in, apart from what you changed' (@($w.history.changed).Count -eq 1 -and @($w.history.changed[0].p).Count -eq 0 -and @($w.history.changed[0].v).Count -eq 9)
+    Check 'the crash site is cleared, and not joined to the rest by a guess' ((Cell $w.explored -1500 1500) -and -not (Cell $w.explored -1250 1250))
+    Check 'the save says how often Virginia came to see you' ($w.history.virginia -eq 2)
+    Check 'every save of the world is listed, newest first, with where you were' (@($w.saveList).Count -eq 2 -and $w.saveList[0].time -gt $w.saveList[1].time -and $w.saveList[0].day -eq 4 -and $w.saveList[0].world -eq 'world-v')
+    $r = Post '/api/explored/paint' @{ world = 'world-v'; cells = @((90 * 400 + 30), (90 * 400 + 31)); on = $true } # (-1700, -1100) and (-1690, -1100)
+    Check 'the fog brush clears cells' ($r.changed -eq 2 -and (Cell (World (Invoke-RestMethod "$Base/api/state") 'world-v').explored -1700 -1100))
+    $r = Post '/api/explored/paint' @{ world = 'world-v'; cells = @((90 * 400 + 30), (30 * 400 + 370)); on = $false }
+    $e = (World (Invoke-RestMethod "$Base/api/state") 'world-v').explored
+    Check '... and puts the fog back' ($r.changed -eq 2 -and -not (Cell $e -1700 -1100) -and (Cell $e -1690 -1100) -and -not (Cell $e 1700 -1700))
+    $bad = try { Post '/api/explored/paint' @{ world = 'world-v'; cells = @(160000) } | Out-Null; $false } catch { $true }
+    Check '... and refuses cells off the grid' $bad
+    Stop-Map
+    $p = (Read-Json "$data\progress.json").worlds.'world-v'.explored
+    $saved = [Convert]::ToBase64String([Convert]::FromBase64String($p.bits))
+    Check 'what the brush did is saved, and the grid as the current version (4)' ((Cell $saved -1690 -1100) -and -not (Cell $saved -1700 -1100) -and $p.v -eq 4)
+    # an earlier progress file next to the app (a backup from before an older build lost some fog): its cells come back
+    $more = New-Object byte[] 20000; $k = 40 * 400 + 360; $more[$k -shr 3] = [byte](1 -shl ($k -band 7)) # the cell at (1600, -1600)
+    $import = Join-Path $App 'import\progress.json'
+    Set-Json $import ('{"worlds":{"world-v":{"found":[],"pins":[],"explored":{"v":2,"bits":"' + [Convert]::ToBase64String($more) +
+        '","under":{"cave-t":"' + [Convert]::ToBase64String([byte[]](@([byte]2) + (New-Object byte[] 12))) + '"}}}},"trail":[]}')
+    $s = Start-Map $data $vs
+    $w = World $s 'world-v'
+    Check 'an earlier progress file adds what it had explored, on the island and in caves' ((Cell $w.explored 1600 -1600) -and (Cell $w.explored -1690 -1100) -and (Bit $w.exploredUnder.'cave-t' 1) -and (Bit $w.exploredUnder.'cave-t' 0))
+    Stop-Map
+    Check '... once' (@((Read-Json "$data\progress.json").imported | Where-Object { $_ -like 'explored:*' }).Count -eq 1)
+    Remove-Item $import -Force
+
     Write-Host "`n16b. An explored area from an earlier build is made again from history"
     $data = Join-Path $T 'data16b'
     $zeros = [Convert]::ToBase64String((New-Object byte[] 20000))
@@ -354,7 +409,7 @@ try {
     $s = Start-Map $data $es
     Check 'made again from the saves (version 1 had smaller circles)' (Cell (World $s 'world-e').explored 100 200)
     Stop-Map
-    Check '... and saved as the current version (3)' ((Read-Json "$data\progress.json").worlds.'world-e'.explored.v -eq 3)
+    Check '... and saved as the current version (4)' ((Read-Json "$data\progress.json").worlds.'world-e'.explored.v -eq 4)
 }
 finally {
     Stop-Map

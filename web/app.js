@@ -61,9 +61,12 @@
     encountered: new Set(), revealed: new Set(), seen: new Set(), probable: new Set(), dismissed: new Set(),
     explored: new Map(), exploredUnder: new Map() }; // world -> its explored cells, and per cave (see "fog" below) // see "Explore and Guide" below
   const MARK_LISTS = ['encountered', 'revealed', 'seen', 'probable', 'dismissed'];
+  // No game on screen yet: not playing, and you haven't picked one ("Which game?" below)
+  const unchosen = () => !store.view && store.worlds.size > 0;
   let cave = null; // the cave or bunker being shown instead of the island, or null
   let onFoundChange = null; // the welcome's count of what your saves marked, while it's open
   let welcomeStep = 0; // the welcome's step on screen (0: closed)
+  let brush = null; // the fog brush while it's on: { world } (see "the fog brush" below)
   let heldToast = null; // a message that came while the welcome was open: shown when it closes
 
   async function api(path, body) {
@@ -584,7 +587,7 @@
 
   function drawMe() {
     const pos = store.position;
-    const elsewhere = store.view && store.active && store.view !== store.active;
+    const elsewhere = unchosen() || !!(pos?.world && store.view && pos.world !== store.view);
     if (meMarker) meMarker.getElement()?.classList.toggle('hidden-world', !!elsewhere);
     if (!pos || elsewhere) { drawOthers(); updateStatus(); return; }
     if (!meMarker) {
@@ -702,12 +705,31 @@
     return areaAt(o.x, o.y, o.h)?.id === cave.id;
   }
 
+  // Virginia is out on the island from the start, and the game always knows where. Explore shows her once
+  // you've met her: she came within 40 m of you, or your saves say she has come to see you. Kelvin is with you.
+  const VIRGINIA_MET = -1; // kept in the world's "seen" list (the rest of it are vehicles' location ids)
+  const MEET_DIST = 40;
+  function metVirginia() {
+    return store.seen.has(VIRGINIA_MET) || store.worlds.get(store.view)?.history?.virginia > 0;
+  }
+  function noteVirginia(o, pos) {
+    if (o.k !== 'virginia' || o.dead || metVirginia() || pos.source !== 'live' || !store.view || store.view !== pos.world) return;
+    if (Math.hypot(o.x - pos.x, o.y - pos.y) > MEET_DIST || (o.h != null && pos.h != null && Math.abs(o.h - pos.h) > 15)) return;
+    store.seen.add(VIRGINIA_MET);
+    persistMarks('seen', [VIRGINIA_MET]);
+    toast('You met Virginia. She shows on the map from now on.');
+  }
+
   function drawOthers() {
     const pos = store.position;
-    const others = liveFresh() ? pos.others || [] : [];
+    // live, and on the map of the game being played (not another one you're looking at)
+    const here = liveFresh() && !unchosen() && (!store.view || !pos.world || store.view === pos.world);
+    const others = here ? pos.others || [] : [];
     const seen = new Set();
     others.forEach((o, i) => {
       if (!visibleHere(o)) return;
+      noteVirginia(o, pos);
+      if (o.k === 'virginia' && exploring() && !metVirginia()) return;
       const mate = MATES[o.k];
       const key = o.k === 'player' ? `p:${o.n || i}` : `${o.k}:${i}`;
       const name = mate ? mate.name : o.n || 'Player';
@@ -743,14 +765,14 @@
 
     const tagsSeen = new Set();
     const nth = new Map();
-    const fromGps = [];
-    for (const t of liveFresh() ? pos.tags || [] : []) {
+    for (const t of here ? pos.tags || [] : []) {
       if (!visibleHere(t)) continue;
       const type = GPS_TYPES[t.i];
       if (type?.vehicle && !t.a) continue; // vehicles have their own markers (in Explore once you've seen or moved them)
-      // a cave or locator your GPS shows is on the map already; and shown in Explore, since your GPS shows it
-      const same = type?.like && LOCS.find((l) => type.like(l) && Math.hypot(l.x - t.x, l.y - t.y) < 25);
-      if (same) { if (!store.revealed.has(same.id)) fromGps.push(same.id); continue; }
+      // The game's own markers (caves, GPS locators) are on your GPS from the start: Explore leaves them for
+      // you to find by going there. Guide shows every place already. Trackers you put out still show.
+      if (type?.like && exploring()) continue;
+      if (type?.like && LOCS.some((l) => type.like(l) && Math.hypot(l.x - t.x, l.y - t.y) < 25)) continue;
       const label = t.t?.trim().length > 1 ? t.t : t.a ? 'GPS tracker (moving)' : type ? type.name : `GPS marker (type ${t.i ?? '?'})`;
       const color = t.c || '#38c6d9';
       const base = `${label}|${color}`;
@@ -767,7 +789,6 @@
     for (const [key, m] of tagMarkers) {
       if (!tagsSeen.has(key)) { tagLayer.removeLayer(m); tagMarkers.delete(key); }
     }
-    if (fromGps.length) reveal([...new Set(fromGps)]);
   }
 
   // The chip says where the position comes from; phones get a short version ("Live", "Day 17 · 21m").
@@ -778,11 +799,16 @@
     btn.classList.remove('live', 'save');
     let long;
     let short;
-    if (store.view && store.active && store.view !== store.active) {
-      // browsing another world than the one you play (or saved last)
+    const raw = store.serverPosition;
+    const playing = raw?.source === 'live' && Date.now() / 1000 - raw.time < 20;
+    if (unchosen()) {
+      long = 'Not playing · pick a save, or start the game';
+      short = 'Not playing';
+    } else if (playing && raw.world && store.view !== raw.world) {
+      // looking at another game than the one you play
       btn.classList.add('save');
       const w = store.worlds.get(store.view);
-      long = `Viewing ${worldName(w)}${w?.day != null ? ` · Day ${w.day}` : ''}`;
+      long = `Viewing ${worldName(w)}${w?.day != null ? ` · Day ${w.day}` : ''} · you're playing another game`;
       short = w?.day != null ? `Other world · Day ${w.day}` : 'Other world';
     } else if (pos && pos.source === 'live' && Date.now() / 1000 - pos.time < 20) {
       btn.classList.add('live');
@@ -791,7 +817,9 @@
     } else if (pos) {
       btn.classList.add('save');
       const day = pos.day != null ? `Day ${pos.day} · ` : '';
-      long = `Last save · ${day}${ago(pos.time)}`;
+      const newest = store.worlds.get(store.view)?.saveList?.[0];
+      const which = pos.source === 'save' && newest && pos.time < newest.time - 1 ? 'Save' : pos.source === 'live' ? 'Last seen' : 'Last save';
+      long = `${which} · ${day}${ago(pos.time)}`;
       short = `${day}${agoShort(pos.time)}`;
     } else if (!store.online) {
       long = 'Offline · progress kept in this browser';
@@ -810,6 +838,7 @@
   const trailRenderer = L.canvas({ padding: 0.3 });
   const trailLayer = L.layerGroup().addTo(map);
   function currentTrail() {
+    if (unchosen()) return [];
     const world = store.view || store.position?.world;
     return store.trail.filter((p) => !world || !p.w || p.w === world);
   }
@@ -1034,6 +1063,10 @@
     if (!bits) return;
     for (const k of cells) bits[k >> 3] |= 1 << (k & 7);
     if (world !== store.view || fogPainted !== bits) return renderExploredStat();
+    repaintAround(cells);
+  }
+  // Cells of the world on screen changed (added, or the fog brush took some away): paint around them again.
+  function repaintAround(cells) {
     fogHolesFromBits();
     let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
     for (const k of cells) {
@@ -1122,7 +1155,7 @@
     }
     trailLayer.clearLayers();
     trailDrawn = { sig, ref: store.trail, count: store.trail.length, line: null, last: null };
-    if (!prefs.showTrail || cave) return;
+    if (!prefs.showTrail || cave || unchosen()) return;
     // Spots close together are one dot: you save at your base again and again, and a stack of dots, each a
     // little off the last, turns into a heavy ring.
     const together = (list, metres) => {
@@ -1408,6 +1441,7 @@
   }
 
   function showArea(area, { manual = false } = {}) {
+    if (area) closeBrush(); // the brush paints the island's fog
     cave = area ? Object.assign(Object.create(area), { manual }) : null;
     caveLayer.clearLayers();
     document.body.classList.toggle('cave-mode', !!area);
@@ -2445,6 +2479,7 @@
   function setMode(mode, { quiet = false } = {}) {
     hideModeWarn();
     if (mode === prefs.mode) return;
+    closeBrush();
     prefs.mode = mode;
     savePrefs();
     renderMode();
@@ -2618,6 +2653,7 @@
     $('#fog-note').textContent = (!on ? 'Fog is off. Slide to turn it on. ' : '') + (inCave ? `You've explored ${caveExplored(caveDrawn.area)}% of ${inCave}.`
       : !fogBits ? 'Nothing explored in this world yet.'
       : stat ? `You've explored ${stat} of the island.` : '');
+    $('#fog-brush').hidden = !(exploring() && !cave && !!store.view); // see "the fog brush" below
     $('#fog-reset').innerHTML = !fogAsking
       ? `<button class="text-btn danger" data-fog-reset="ask"${fogBits || inCave ? '' : ' disabled'}>Reset exploration</button>`
       : inCave
@@ -2674,6 +2710,163 @@
     });
   });
 
+  // ---------- the fog brush (Explore): paint the fog away where you've been, or back where you weren't ----------
+  // For what the map can't know, like where you went before you used it. Drag over the map; it doesn't pan
+  // while the brush is on (two fingers still zoom on a phone). A stroke is saved when you let go, and Undo
+  // takes back the last one. It paints the fog's own 10 m cells, so what you paint is what the fog shows.
+  const brushBar = $('#brush-bar');
+  const brushBtn = $('#fog-brush');
+  let brushMode = 'clear';
+  let brushSize = 50; // metres around the pointer
+  let brushRing = null; // where a mouse would paint
+  let stroke = null; // { on, cells, last } while painting
+  let lastStroke = null; // { world, on, cells } for Undo
+  let brushFrame = 0;
+  let brushChanged = [];
+  const brushPointers = new Set();
+  const canBrush = () => exploring() && !cave && !!store.view;
+
+  function openBrush() {
+    if (!canBrush()) return;
+    openFogMenu(false);
+    endDraft();
+    if (!prefs.fogOn?.explore) setFogOn(true);
+    brush = { world: store.view };
+    lastStroke = null;
+    map.dragging.disable();
+    map.doubleClickZoom.disable();
+    document.body.classList.add('brushing');
+    renderBrushBar();
+    brushBar.hidden = false;
+  }
+  function closeBrush() {
+    if (!brush) return;
+    endStroke();
+    brush = null;
+    brushPointers.clear();
+    map.dragging.enable();
+    map.doubleClickZoom.enable();
+    document.body.classList.remove('brushing');
+    brushBar.hidden = true;
+    brushRing?.remove();
+    brushRing = null;
+  }
+  function renderBrushBar() {
+    for (const b of brushBar.querySelectorAll('[data-brush-mode]')) b.setAttribute('aria-checked', b.dataset.brushMode === brushMode);
+    for (const b of brushBar.querySelectorAll('[data-brush-size]')) b.setAttribute('aria-checked', Number(b.dataset.brushSize) === brushSize);
+    brushBar.querySelector('[data-brush="undo"]').disabled = !lastStroke;
+    const how = canHover ? 'Drag over the map' : 'Drag a finger over the map (two fingers zoom)';
+    $('#brush-hint').textContent = brushMode === 'clear' ? `${how} to clear the fog where you've been.` : `${how} to put the fog back where you haven't been.`;
+  }
+  brushBtn.onclick = openBrush;
+  brushBar.addEventListener('click', (e) => {
+    const mode = e.target.closest('[data-brush-mode]')?.dataset.brushMode;
+    const size = e.target.closest('[data-brush-size]')?.dataset.brushSize;
+    const act = e.target.closest('[data-brush]')?.dataset.brush;
+    if (act === 'done') return closeBrush();
+    if (act === 'undo') undoStroke();
+    if (mode) brushMode = mode;
+    if (size) brushSize = Number(size);
+    brushRing?.setRadius(brushSize);
+    renderBrushBar();
+  });
+
+  // the cells whose middle is within r of (x, z), like the map app's own
+  function cellsAround(x, z, r) {
+    const out = [];
+    const i0 = Math.max(0, Math.floor((x - r - GRID.min) / GRID.cell)); const i1 = Math.min(GRID.size - 1, Math.floor((x + r - GRID.min) / GRID.cell));
+    const j0 = Math.max(0, Math.floor((z - r - GRID.min) / GRID.cell)); const j1 = Math.min(GRID.size - 1, Math.floor((z + r - GRID.min) / GRID.cell));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const dx = GRID.min + (i + 0.5) * GRID.cell - x;
+        const dz = GRID.min + (j + 0.5) * GRID.cell - z;
+        if (dx * dx + dz * dz <= r * r) out.push(j * GRID.size + i);
+      }
+    }
+    return out;
+  }
+  function setCells(world, cells, on) {
+    let bits = store.explored.get(world);
+    if (!bits) store.explored.set(world, (bits = new Uint8Array((GRID.size * GRID.size) / 8)));
+    const changed = [];
+    for (const k of cells) {
+      if (!!hasCell(bits, k) === on) continue;
+      if (on) bits[k >> 3] |= 1 << (k & 7);
+      else bits[k >> 3] &= ~(1 << (k & 7));
+      changed.push(k);
+    }
+    if (world === store.view && fogBits !== bits) { fogBits = bits; fogPainted = null; } // its first explored cells
+    return changed;
+  }
+  function paintAt(latlng) {
+    const from = stroke.last || latlng; // between two pointer events too, so a quick stroke is a line and not dots
+    const steps = Math.max(1, Math.ceil(Math.hypot(latlng.lng - from.lng, latlng.lat - from.lat) / (brushSize / 2)));
+    for (let s = stroke.last ? 1 : 0; s <= steps; s++) {
+      const x = from.lng + ((latlng.lng - from.lng) * s) / steps;
+      const z = from.lat + ((latlng.lat - from.lat) * s) / steps;
+      for (const k of setCells(brush.world, cellsAround(x, z, brushSize), stroke.on)) {
+        stroke.cells.add(k);
+        brushChanged.push(k);
+      }
+    }
+    stroke.last = latlng;
+    if (!brushFrame) brushFrame = requestAnimationFrame(brushRepaint);
+  }
+  function brushRepaint() {
+    brushFrame = 0;
+    const cells = brushChanged;
+    brushChanged = [];
+    if (!cells.length) return;
+    if (fogPainted === fogBits) repaintAround(cells);
+    else { drawFog(); renderExploredStat(); }
+  }
+  function endStroke() {
+    const s = stroke;
+    stroke = null;
+    if (!s?.cells.size) return;
+    lastStroke = { world: brush.world, on: s.on, cells: [...s.cells] };
+    renderBrushBar();
+    sendPaint(lastStroke);
+  }
+  function undoStroke() {
+    const s = lastStroke;
+    if (!s) return;
+    lastStroke = null;
+    const changed = setCells(s.world, s.cells, !s.on);
+    if (s.world === store.view && changed.length) { brushChanged.push(...changed); brushRepaint(); }
+    sendPaint({ ...s, on: !s.on });
+  }
+  async function sendPaint({ world, cells, on }) {
+    if (!store.online) return toast('The fog brush needs the map window on your PC.');
+    try {
+      for (let i = 0; i < cells.length; i += 20000) await api('explored/paint', { world, cells: cells.slice(i, i + 20000), on });
+    } catch {
+      toast('Could not save the fog. Is the map window on your PC still open?');
+    }
+  }
+  mapEl.addEventListener('pointerdown', (e) => {
+    if (!brush || e.target.closest('.leaflet-control-container')) return;
+    brushPointers.add(e.pointerId);
+    if (brushPointers.size > 1) { endStroke(); return; } // a second finger: that's a zoom
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    stroke = { on: brushMode === 'clear', cells: new Set(), last: null };
+    paintAt(map.mouseEventToLatLng(e));
+  }, true);
+  mapEl.addEventListener('pointermove', (e) => {
+    if (!brush) return;
+    const at = map.mouseEventToLatLng(e);
+    if (e.pointerType === 'mouse') {
+      if (brushRing) brushRing.setLatLng(at);
+      else brushRing = L.circle(at, { radius: brushSize, color: '#fff', weight: 1.5, dashArray: '4 4', fill: false, interactive: false }).addTo(map);
+    }
+    if (stroke && brushPointers.size === 1) paintAt(at);
+  });
+  for (const ev of ['pointerup', 'pointercancel']) {
+    window.addEventListener(ev, (e) => { brushPointers.delete(e.pointerId); if (stroke) endStroke(); });
+  }
+  mapEl.addEventListener('pointerleave', () => { brushRing?.remove(); brushRing = null; });
+
   // Removes the trail of the world on screen (not your other worlds); Undo brings it back for a few seconds.
   async function resetTrail() {
     const world = store.view || store.position?.world || null;
@@ -2708,6 +2901,7 @@
     dismissing = !!selected || !results.hidden || !trailMenu.hidden || !fogMenu.hidden || !$('#mode-sheet').hidden || !!spread;
   }, true);
   map.on('click', (e) => {
+    if (brush) return; // painting the fog
     if (draft) return moveDraft(e.latlng);
     if (dismissing) {
       dismissing = false;
@@ -2720,7 +2914,7 @@
     pendingDraft = setTimeout(() => startDraft(e.latlng), 260);
   });
   map.on('dblclick', () => clearTimeout(pendingDraft));
-  map.on('contextmenu', (e) => { clearTimeout(pendingDraft); startDraft(e.latlng); });
+  map.on('contextmenu', (e) => { clearTimeout(pendingDraft); if (!brush) startDraft(e.latlng); });
 
   const readout = $('#readout');
   map.on('mousemove', (e) => {
@@ -2758,6 +2952,8 @@
     const typing = /INPUT|TEXTAREA/.test(document.activeElement?.tagName);
     if (e.key === 'Escape') {
       if (!shotView.hidden) shotView.hidden = true;
+      else if (brush) closeBrush();
+      else if (!chooser.hidden) { chooserDismissed = true; closeChooser(); renderWorldPick(); }
       else if (!trailMenu.hidden) openTrailMenu(false);
       else if (!phoneModal.hidden) phoneModal.hidden = true;
       else if (draft) endDraft();
@@ -2885,7 +3081,7 @@
     }
     if (!t) return;
     const pos = store.position;
-    const mine = pos && (!store.view || !store.active || store.view === store.active);
+    const mine = pos && !unchosen() && (!pos.world || !store.view || pos.world === store.view);
     let text = `Guiding to ${t.label}`;
     if (!mine && guideLine) {
       guideLayer.removeLayer(guideLine);
@@ -2919,30 +3115,76 @@
     return [w.day != null ? `Day ${w.day}` : '', modes].filter(Boolean).join(' · ');
   }
 
-  // Called with the server's list; switches what the map shows when the world you play changes.
+  // Called with the server's list. The map shows the game you play; when you stop, it stays on that one. Not
+  // playing and nothing picked (or that game is gone: a new one you never saved), it asks which game.
   function setWorlds(active, list, { quiet = false } = {}) {
     const before = store.active;
+    const shown = store.view;
     store.worlds = new Map((list || []).map((w) => [w.uid, w]));
     store.explored = new Map((list || []).filter((w) => w.explored).map((w) => [w.uid, bitsFrom(w.explored)]));
     store.exploredUnder = new Map((list || []).map((w) => [w.uid, new Map(Object.entries(w.exploredUnder || {}).map(([id, b]) => [id, bitsFrom(b)]))]));
     store.active = active;
-    if (!store.viewPinned || !store.worlds.has(store.view)) {
-      store.viewPinned = false;
-      store.view = active;
+    const playing = liveFresh() && store.position.world === active;
+    if (playing && before !== active) { store.viewPinned = false; store.pickedSave = null; } // you started playing: show that game
+    if (store.view && !store.worlds.has(store.view)) { store.view = null; store.viewPinned = false; }
+    if (!store.view && !playing) {
+      if (shown) { closeBrush(); endDraft(); showNothing(); }
+      openChooser();
+      renderWorldPick();
+      return;
     }
-    if (!quiet && before && before !== active && store.worlds.has(active)) {
+    if (!store.view || (playing && !store.viewPinned)) store.view = active;
+    if (store.view !== shown) { closeBrush(); endDraft(); }
+    if (playing) closeChooser();
+    if (!quiet && playing && before && before !== active && store.worlds.has(active)) {
       const w = store.worlds.get(active);
       toast(`Now playing: ${worldName(w)}${worldDetail(w) ? ' · ' + worldDetail(w) : ''}`);
     }
     showWorld(store.view);
     renderWorldPick();
   }
+  // No game on screen: an empty map (Explore shows nothing you haven't found, and there's no game to have found it in).
+  function showNothing() {
+    store.found = new Set();
+    store.pins = [];
+    store.target = null;
+    for (const k of MARK_LISTS) store[k] = new Set();
+    for (const l of LOCS) { // vehicles back where they start
+      if (l.x0 === undefined) continue;
+      l.x = l.x0;
+      l.y = l.y0;
+      delete l.parked;
+      markers.get(l.id)?.setLatLng([l.y, l.x]);
+    }
+    applyWorld({ camps: [], vehicles: [], time: 0 });
+    setFogWorld();
+    LOCS.forEach((l) => paintMarker(l.id));
+    applyFilters();
+    renderSidebar();
+    drawPins();
+    drawTrail();
+    drawMe();
+    drawGuide();
+  }
+
+  // Where "you" are on the map of the game on screen: live while you play it; otherwise the save you picked,
+  // or the newest of that game (the map app's own position may be another game's save).
+  function effectivePosition() {
+    const p = store.serverPosition;
+    if (!store.view || (p?.source === 'live' && Date.now() / 1000 - p.time < 20)) return p;
+    if (store.pickedSave?.world === store.view) return { ...store.pickedSave, source: 'save' };
+    if (p && (!p.world || p.world === store.view)) return p;
+    const s = store.worlds.get(store.view)?.saveList?.[0];
+    return s ? { ...s, source: 'save', world: store.view } : p;
+  }
+  function refreshPosition() { store.position = effectivePosition(); }
 
   function showWorld(uid) {
     const w = store.worlds.get(uid);
     if (!w) return;
-    if (uid !== store.view) endDraft();
+    if (uid !== store.view) { endDraft(); closeBrush(); }
     store.view = uid;
+    refreshPosition();
     store.found = new Set(w.found || []);
     store.pins = w.pins || [];
     store.target = w.target || null;
@@ -2969,20 +3211,85 @@
     if (selected) renderDetail();
   }
 
+  const newestFirst = () => [...store.worlds.values()].sort((a, b) => (b.last || 0) - (a.last || 0));
+  const playingNow = (uid) => liveFresh() && store.position.world === uid;
   function renderWorldPick() {
-    const list = [...store.worlds.values()];
-    worldPick.closest('.world-pick').hidden = list.length < 2;
-    worldPick.innerHTML = list.map((w) => `<option value="${esc(w.uid)}"${w.uid === store.view ? ' selected' : ''}>${esc(worldName(w))}${worldDetail(w) ? ' · ' + esc(worldDetail(w)) : ''}${w.uid === store.active ? ' · playing' : ''}</option>`).join('');
+    const list = newestFirst();
+    worldPick.closest('.world-pick').hidden = list.length < 2 && !!store.view;
+    $('#choose-save').hidden = !list.some((w) => w.saveList?.length);
+    worldPick.innerHTML = (store.view ? '' : '<option value="" selected>Choose a game…</option>')
+      + list.map((w) => `<option value="${esc(w.uid)}"${w.uid === store.view ? ' selected' : ''}>${esc(worldName(w))}${worldDetail(w) ? ' · ' + esc(worldDetail(w)) : ''}${playingNow(w.uid) ? ' · playing' : ''}</option>`).join('');
   }
-  worldPick.onchange = () => {
-    store.viewPinned = worldPick.value !== store.active;
+  worldPick.onchange = () => { if (worldPick.value) chooseWorld(worldPick.value); };
+  // A game to look at (its newest save, or the save you picked): the map goes to where you were in it.
+  function chooseWorld(uid, save = null) {
+    store.pickedSave = save ? { ...save, world: uid } : null;
+    store.viewPinned = !playingNow(uid);
+    closeChooser();
     closeDetail();
-    showWorld(worldPick.value);
+    showWorld(uid);
     renderWorldPick();
-  };
+    const at = store.position?.world === uid ? store.position : null;
+    if (at && !cave) map.setView([at.y, at.x], Math.max(map.getZoom(), -1), { animate: false });
+  }
+  // The start screen. The game you play shows by itself; until you play (the game isn't running, or you're
+  // still in its menu), the map waits for it, and you can look at any of your saves, newest first, instead
+  // of the map just showing the one you saved last.
+  const chooser = $('#world-choose');
+  const CHOOSE_FIRST = 8;
+  let chooserDismissed = false;
+  let chooserAll = false;
+  function allSaves() {
+    return newestFirst().flatMap((w) => (w.saveList || []).map((s) => ({ w, s }))).sort((a, b) => b.s.time - a.s.time);
+  }
+  function openChooser({ asked = false } = {}) {
+    if (!asked && (chooserDismissed || store.view)) return;
+    if (!store.worlds.size || welcomeStep) return; // after the welcome (closeWelcome asks)
+    const saves = allSaves();
+    const shown = chooserAll ? saves : saves.slice(0, CHOOSE_FIRST);
+    $('#choose-list').innerHTML = shown.map(({ w, s }, i) => {
+      const when = new Date(s.time * 1000).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+      const what = [worldName(w), MODE_NAMES[s.mode] || s.mode].filter(Boolean).join(' · ');
+      return `<button class="welcome-option" data-choose="${i}"><strong>${s.day != null ? `Day ${esc(s.day)}` : 'Save'} · ${esc(when)}</strong>`
+        + `<span>${esc(ago(s.time))} · ${esc(what)}</span></button>`;
+    }).join('') || '<p class="welcome-note">No saves on this PC yet.</p>';
+    chooser.shownSaves = shown;
+    chooser.querySelector('.start-wait').hidden = liveFresh() && store.worlds.has(store.position.world); // playing already
+    const more = $('#choose-more');
+    more.hidden = chooserAll || saves.length <= CHOOSE_FIRST;
+    more.textContent = `Show all ${saves.length} saves`;
+    chooser.hidden = false;
+  }
+  function closeChooser() { chooser.hidden = true; }
+  chooser.addEventListener('click', (e) => {
+    const pick = e.target.closest('[data-choose]')?.dataset.choose;
+    if (!pick && e.target !== chooser) return;
+    if (pick === 'more') { chooserAll = true; return openChooser({ asked: true }); }
+    if (!pick || pick === 'wait') { chooserDismissed = true; closeChooser(); renderWorldPick(); return; }
+    const it = chooser.shownSaves?.[Number(pick)];
+    if (it) chooseWorld(it.w.uid, it.s);
+  });
+  $('#choose-save').onclick = () => { closeDrawer(); openChooser({ asked: true }); };
+  // You started playing, or another game: show that one, whatever was picked before. (Picking another game
+  // while you play keeps it, until you play another.) The list of worlds may come just before or after.
+  let playedWorld = null; // the world the live feed last said you play
+  function followPlaying() {
+    const w = liveFresh() ? store.position.world : null;
+    if (w === playedWorld) return;
+    playedWorld = w;
+    if (w) store.pickedSave = null; // playing: you're where the game says
+    if (!w || !store.worlds.has(w) || w === store.view) return;
+    store.active = w;
+    store.viewPinned = false;
+    closeChooser();
+    showWorld(w);
+    renderWorldPick();
+  }
 
   // ---------- start ----------
   function applyState(s) {
+    if ('position' in s) store.serverPosition = store.position = s.position; // first: whether you're playing decides which game shows
+    store.trail = s.trail || [];
     if (s.worlds) {
       setWorlds(s.active, s.worlds, { quiet: true });
     } else {
@@ -2990,8 +3297,6 @@
       store.pins = s.pins || [];
       for (const k of MARK_LISTS) store[k] = new Set(s[k] || []);
     }
-    store.trail = s.trail || [];
-    if ('position' in s) store.position = s.position;
     if (s.info) store.info = s.info;
     if (s.info?.version && !seenVersion(s.info.version)) return;
     if (s.world && !s.worlds) applyWorld(s.world);
@@ -3015,7 +3320,12 @@
       api('state').then(applyState).catch(() => {});
       api('update').then(applyUpdate).catch(() => {}); // after an update: another version, so the page reloads
     };
-    es.addEventListener('position', (e) => { store.position = JSON.parse(e.data); drawMe(); drawTrail(); autoMark(); });
+    es.addEventListener('position', (e) => {
+      store.serverPosition = store.position = JSON.parse(e.data);
+      followPlaying();
+      refreshPosition();
+      drawMe(); drawTrail(); autoMark();
+    });
     es.addEventListener('found', (e) => {
       const msg = JSON.parse(e.data);
       const list = Array.isArray(msg) ? msg : msg.found;
@@ -3328,6 +3638,7 @@
     try { localStorage.setItem(WELCOME_KEY, '1'); } catch { /* storage blocked: it may show again */ }
     savePrefs(); // from now on this device has settings, so the welcome doesn't come back by itself
     if (heldToast) { const [msg, opts] = heldToast; heldToast = null; toast(msg, opts); }
+    if (unchosen()) openChooser();
   }
   function welcomeGo(step) {
     welcomeStep = step;
@@ -3391,7 +3702,7 @@
       // only a few hundred metres); the cave view zooms itself
       const short = Math.min(map.getSize().x, map.getSize().y);
       // (at once: an animated zoom shows the trail's canvas stretched until it's drawn again)
-      if (store.position && !cave) map.setView([store.position.y, store.position.x], Math.min(-1, Math.round(Math.log2(short / 1200) * 2) / 2), { animate: false });
+      if (store.position && !cave && !unchosen()) map.setView([store.position.y, store.position.x], Math.min(-1, Math.round(Math.log2(short / 1200) * 2) / 2), { animate: false });
       listen();
     })
     .catch(() => {

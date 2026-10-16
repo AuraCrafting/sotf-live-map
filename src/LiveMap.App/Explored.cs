@@ -176,6 +176,18 @@ public sealed class ExploredGrid
 
     public bool Has(int index) => (_bits[index >> 3] & (1 << (index & 7))) != 0;
 
+    /// <summary>Marks one cell as explored (on) or not. True when it changed.</summary>
+    public bool Set(int index, bool on)
+    {
+        if (Has(index) == on)
+            return false;
+        if (on)
+            _bits[index >> 3] |= (byte)(1 << (index & 7));
+        else
+            _bits[index >> 3] &= (byte)~(1 << (index & 7));
+        return true;
+    }
+
     public int Count => _bits.Sum(b => System.Numerics.BitOperations.PopCount(b));
 
     /// <summary>Adds every cell another grid has (Undo after a reset keeps what you explored since).</summary>

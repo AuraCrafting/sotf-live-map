@@ -25,6 +25,8 @@ public sealed class SaveInfo
     public List<(float x, float z, float h)> Changed = new();
     /// <summary>The crash site the world started at, as GameState says ("ocean", "mountain", "forest").</summary>
     public string CrashSite;
+    /// <summary>Where the island's golf carts and Knight Vs stand, and gliders you put down: see <see cref="SaveWatcher.ReadVehicleSpots"/>.</summary>
+    public List<(string id, float x, float z, float h)> VehicleSpots = new();
 
     public JsonObject ToPosition() => new()
     {
@@ -172,6 +174,7 @@ public sealed class SaveWatcher
                 ? saved.ToUnixTimeMilliseconds() / 1000.0 : fileTime,
             Changed = ReadChanged(zip),
             CrashSite = game["CrashSite"]?.ToString()?.ToLowerInvariant(),
+            VehicleSpots = ReadVehicleSpots(zip),
         };
         return info;
     }
@@ -260,9 +263,16 @@ public sealed class SaveWatcher
     //   items      every item id in your inventory (the map marks an item found when it has one spot only)
     //   pois       the game's own "point of interest found" flags, by name ("Bunker Entertainment")
     //   spots      both ends of every zip line you put up
+    //   virginia   how often Virginia has come to see you (the game's "Virginia Short/Long" world events), so
+    //              Explore shows her once you've met her
     //   changed    (added by Scan, from every save of the world) where you changed something: ChangedGroups
     internal static JsonObject ReadHistory(ZipArchive zip)
     {
+        var virginia = 0;
+        if (Inner(zip, "SaveData.json", "VailWorldSim")["WorldEventData"]?["WorldEventTypeStats"] is JsonArray events)
+            foreach (var e in events.OfType<JsonObject>())
+                if (e["Name"]?.ToString()?.StartsWith("Virginia", StringComparison.OrdinalIgnoreCase) == true)
+                    virginia += (int)N(e["RunCount"]);
         var items = new SortedSet<int>();
         CollectItemIds(Inner(zip, "PlayerInventorySaveData.json", "PlayerInventory"), items);
         var pois = new JsonArray();
@@ -286,6 +296,7 @@ public sealed class SaveWatcher
         return new JsonObject
         {
             ["items"] = new JsonArray(items.Select(i => (JsonNode)i).ToArray()), ["pois"] = pois, ["spots"] = spots,
+            ["virginia"] = virginia,
         };
     }
 
@@ -319,14 +330,44 @@ public sealed class SaveWatcher
     /// <summary>
     /// Every save of a world adds to what you changed (old saves still count when newer ones are gone).
     /// One group per save, oldest first, with only the spots that first show up in it, in 2 m cells:
-    /// [{ "t": save time, "p": [x, z, height, x, z, height, ...] }]. So a page only looks at what's new.
+    /// [{ "t": save time, "p": [x, z, height, x, z, height, ...], "v": [...] }]. So a page only looks at what's new.
+    /// "v" (when there are any) are where you moved a vehicle: a golf cart or Knight V that stands somewhere else
+    /// than in the save before was taken from its old spot and left at the new one, so you were at both; a glider
+    /// you put down is where you were too. They're places you've been, not things you changed (no item came from there).
     /// </summary>
     internal static JsonArray ChangedGroups(IEnumerable<SaveInfo> saves)
     {
         var cells = new HashSet<(int, int, int)>();
+        var vehicleCells = new HashSet<(int, int)>();
+        Dictionary<string, (float x, float z, float h)> before = null;
         var groups = new JsonArray();
         foreach (var save in saves)
         {
+            var moved = new List<JsonNode>();
+            void Spot((float x, float z, float h) at)
+            {
+                if (!vehicleCells.Add(((int)Math.Floor(at.x / ChangedCell), (int)Math.Floor(at.z / ChangedCell))))
+                    return;
+                moved.Add(Math.Round(at.x, 1));
+                moved.Add(Math.Round(at.z, 1));
+                moved.Add((int)Math.Round(at.h));
+            }
+            var now = new Dictionary<string, (float x, float z, float h)>();
+            foreach (var (id, x, z, h) in save.VehicleSpots)
+                now.TryAdd(id, (x, z, h));
+            foreach (var (id, at) in now)
+            {
+                if (!id.StartsWith("World.", StringComparison.Ordinal))
+                    Spot(at); // a glider you put down
+                else if (before != null && before.TryGetValue(id, out var was)
+                         && (was.x - at.x) * (was.x - at.x) + (was.z - at.z) * (was.z - at.z) > VehicleMoved * VehicleMoved)
+                {
+                    Spot(was);
+                    Spot(at);
+                }
+            }
+            if (now.Count > 0) // a save without vehicles (an unreadable one) doesn't make every vehicle look moved
+                before = now;
             var pts = new List<JsonNode>();
             foreach (var (x, z, h) in save.Changed)
             {
@@ -337,10 +378,34 @@ public sealed class SaveWatcher
                 pts.Add(cz * ChangedCell + ChangedCell / 2);
                 pts.Add((int)Math.Round(h));
             }
-            if (pts.Count > 0)
-                groups.Add(new JsonObject { ["t"] = save.Time, ["p"] = new JsonArray(pts.ToArray()) });
+            if (pts.Count == 0 && moved.Count == 0)
+                continue;
+            var group = new JsonObject { ["t"] = save.Time, ["p"] = new JsonArray(pts.ToArray()) };
+            if (moved.Count > 0)
+                group["v"] = new JsonArray(moved.ToArray());
+            groups.Add(group);
         }
         return groups;
+    }
+
+    private const double VehicleMoved = 5; // metres; less is a cart settling, not you driving it
+
+    /// <summary>
+    /// Where every golf cart and Knight V stands (World.GolfCart.N, World.KnightV.N: the island's own, one id
+    /// each, which move when you drive them), and every glider you put down (an id of its own). The island's
+    /// gliders (World.HangGlider.N) stay listed where they start, so they say nothing.
+    /// </summary>
+    internal static List<(string id, float x, float z, float h)> ReadVehicleSpots(ZipArchive zip)
+    {
+        var list = new List<(string id, float x, float z, float h)>();
+        foreach (var v in ReadVehicles(zip).OfType<JsonObject>())
+        {
+            var id = v["id"]?.ToString() ?? "";
+            if (v["k"]?.ToString() == "glider" && v["mine"] == null)
+                continue;
+            list.Add((id, (float)N(v["x"]), (float)N(v["y"]), (float)N(v["h"])));
+        }
+        return list;
     }
 
     private static void CollectItemIds(JsonNode node, SortedSet<int> into)

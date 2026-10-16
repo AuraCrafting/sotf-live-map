@@ -12,11 +12,14 @@ Underground, it switches to the cave or bunker you're in.
   **Show location (spoiler)** button. *Guide* shows every location. Switch with the slider in the top bar
   (tap or slide it); going to Guide asks first, and coming back to Explore is one tap and changes nothing.
 - **Fog over what you haven't explored.** In Explore, mist covers the island except where you've been:
-  about 50 m around you as you play, where you saved, what you changed in the world, your camps and the
-  places you found. It fills in from your saves (and an earlier version's trail) on the first start. The
+  about 50 m around you as you play, where you saved, what you changed in the world, your camps, the
+  places you found, and where a golf cart or Knight V you drove stood and where you left it. It fills in
+  from your saves (and an earlier version's trail) on the first start, and around your crash site. The
   **Fog** button on the right turns it on or off (on in Explore, off in Guide until you turn it on); point at
   it (or turn it on, on a phone) to set how thick it is (it starts thin), see how much of the island you've
-  explored, or put the fog back over everything (with Undo). Clearing your trail doesn't touch it. Caves and bunkers have fog of
+  explored, or put the fog back over everything (with Undo). Clearing your trail doesn't touch it. Started
+  using the map mid-game? The **Fog brush** (in the same menu) paints the fog away where you've been, or
+  back where you haven't, in three sizes, with Undo. Caves and bunkers have fog of
   their own: in their view, the tunnels you haven't been through are misty or hidden, the banner says how
   much of that cave you've explored, and you can reset just that one. Walking over a cave doesn't count.
 - **Your history from your saves.** Items you carry that have only one spot on the map, the places the
@@ -30,10 +33,12 @@ Underground, it switches to the cave or bunker you're in.
   marked **Probably found here**, with one tap to confirm it or to say it wasn't there.
 - **Live position.** You, with the direction you're facing, updated twice a second and gliding smoothly
   between updates. "Follow me" keeps you in the middle of the map.
-- **Kelvin and Virginia.** Their live positions, with names.
+- **Kelvin and Virginia.** Their live positions, with names. In Explore, Virginia shows once you've met her
+  (she came close, or your save says she has come to see you).
 - **Co-op friends.** Other players are shown the same way as you, in their own colour and with their name.
 - **Your GPS markers.** Trackers you placed and tracker darts, as the in-game GPS shows them. The GPS's own
-  markers are named by what they are (Cave, GPS locator, ...), and a cave your GPS shows counts as known.
+  markers (caves, GPS locators) are on your GPS from the start; Explore leaves them for you to find, and
+  Guide shows every place anyway.
 - **Cave and bunker view.** When you go underground, the island goes dark and the map shows that cave's
   tunnels and only the items inside it. The outlines are read from the game's own files and drawn as a
   plan: each floor in its own colour, ramps and shafts in grey, walls, a 10 m grid, a scale bar and north.
@@ -53,8 +58,9 @@ Underground, it switches to the cave or bunker you're in.
   sit right next to it (Enter places it, Esc cancels); on a phone they're in a small bar at the bottom.
 - **Your trail.** Show the last hour, today or everything, or reset it for one world (with Undo).
 - **Every world separately.** Single player and co-op worlds each keep their own found markers, pins,
-  trail, camps and vehicles. When you load another world, the map switches straight away, without you
-  saving first. A picker lets you look at your other worlds.
+  trail, camps and vehicles. The map shows the game you play, switching straight away when you load
+  another (without you saving first). Before you play, it waits for the game and lets you pick any of your
+  saves, newest first, to look at its map; **Look at a save** in the menu brings that list back.
 - **Guide me here.** Pick any item, pin or camp on the map (on your PC or phone), and an arrow at the top of
   the game screen points the way, with the distance and direction ("Main base · 320 m · NE"). Press **F8**
   to hide or show it. It's an overlay only; the game's own GPS isn't touched.
