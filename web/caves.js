@@ -2,7 +2,10 @@
 // the height of the floor there. Those cells are samples, so rooms come out dotty and a few heights are off
 // (a ceiling at 97 m in a 64 m room). SOTF_CAVES.analyse(area) turns an outline into:
 //   floors   the heights many cells share (flat ones, at least 4 m apart), lowest first; cells within 3 m
-//            of one are on it, the rest are ramps and shafts
+//            of one are on it, the rest are ramps and shafts. Only levels that lie over each other (one you
+//            could walk under or over, down a ladder, stairs or a rope) are floors of their own; the others
+//            go together, so a cave that just slopes or steps down is one floor with no ramps, and the map
+//            shows no floor chips for it
 //   layers   per floor (and one for the ramps and shafts), the cells with the gaps between them filled:
 //            grown by a cell in every direction, then shrunk back from the four sides (three cells for
 //            caves, which are sampled much more sparsely than bunkers)
@@ -16,6 +19,10 @@
   const FLOOR_NEAR = 3; // a cell within this of a floor's height is on that floor
   const MAX_FLOORS = 5; // as many as there are colours for
   const SPECK = 3; // a group made from fewer outline cells than this isn't drawn
+  // two levels lie over each other when (outlines from objects) this many cells of one have the other's on
+  // both sides within 4 m, or (outlines from floor meshes, a cell for each floor) they share this many spots
+  const STACK = 8;
+  const STACK_SHARED = 25; // 100 m²: a ledge or a bridge over a passage isn't a floor of its own
   const key = (gx, gz) => gx * 65536 + gz; // grid steps stay well within +-32768
   const unkey = (id) => { const gx = Math.round(id / 65536); return [gx, id - gx * 65536]; };
 
@@ -88,14 +95,58 @@
       return best;
     };
     for (let k = 0; k < n; k++) floorOf[k] = nearest(sm[k]);
-    // each floor at the median height of its cells
-    floors = floors.map((h, i) => {
-      const on = [];
-      for (let k = 0; k < n; k++) if (floorOf[k] === i) on.push(sm[k]);
-      return { h: on.length ? Math.round(median(on) * 10) / 10 : h, cells: on.length };
-    });
 
-    // 3. per floor, the gaps filled
+    // 3. levels side by side are one floor. An outline from the floor meshes ("v": 2) has a cell for each
+    // floor where two lie over each other, so stacked levels share spots. One from objects has a cell per
+    // spot, sampled from whichever level: there, stacked levels come out mixed together, cells of one with
+    // the other's on both sides; where levels only meet, at a step or the end of a slope, hardly any are.
+    // Lowest first, each floor joins the nearest group it doesn't lie over.
+    const spots = floors.map(() => new Set());
+    for (let k = 0; k < n; k++) if (floorOf[k] >= 0) spots[floorOf[k]].add(key(gx[k], gz[k]));
+    const shared = (a, b) => { let m = 0; for (const id of a) if (b.has(id)) m++; return m; };
+    const between = (a, b) => { // cells of a with b on both sides
+      let m = 0;
+      for (const id of a) {
+        const [x, z] = unkey(id);
+        const near = (dx, dz) => b.has(key(x + dx, z + dz)) || b.has(key(x + 2 * dx, z + 2 * dz));
+        if ((near(1, 0) && near(-1, 0)) || (near(0, 1) && near(0, -1))) m++;
+      }
+      return m;
+    };
+    const stacked = (i, j) => (area.v >= 2
+      ? shared(spots[i], spots[j]) >= STACK_SHARED
+      : between(spots[i], spots[j]) + between(spots[j], spots[i]) >= STACK);
+    const groups = [];
+    floors.forEach((_, f) => {
+      const g = [...groups].reverse().find((members) => members.every((o) => !stacked(o, f)));
+      if (g) g.push(f);
+      else groups.push([f]);
+    });
+    if (groups.length < 2) {
+      floorOf.fill(0); // one floor: the ramps and shafts are part of it too
+      floors = [{ h: Math.round(median(sm) * 10) / 10, cells: n }];
+    } else {
+      // a slope between floors of one group (within 3 m of its lowest and highest) belongs to it
+      const span = groups.map((members) => [floors[members[0]] - FLOOR_NEAR, floors[members.at(-1)] + FLOOR_NEAR]);
+      const groupOf = new Int8Array(floors.length);
+      groups.forEach((members, g) => { for (const f of members) groupOf[f] = g; });
+      for (let k = 0; k < n; k++) {
+        if (floorOf[k] >= 0) { floorOf[k] = groupOf[floorOf[k]]; continue; }
+        const fits = span.flatMap(([lo, hi], g) => (sm[k] >= lo && sm[k] <= hi ? [g] : []));
+        if (fits.length === 1) floorOf[k] = fits[0];
+      }
+      // each floor at the median height of its cells, lowest first
+      floors = groups.map((_, g) => {
+        const on = [];
+        for (let k = 0; k < n; k++) if (floorOf[k] === g) on.push(sm[k]);
+        return { h: Math.round(median(on) * 10) / 10, cells: on.length, was: g };
+      }).sort((a, b) => a.h - b.h);
+      const order = new Int8Array(groups.length);
+      floors.forEach((f, i) => { order[f.was] = i; delete f.was; });
+      for (let k = 0; k < n; k++) if (floorOf[k] >= 0) floorOf[k] = order[floorOf[k]];
+    }
+
+    // 4. per floor, the gaps filled
     const r = area.kind === 'bunker' ? 1 : 3;
     const layers = [];
     let gx0 = Infinity; let gz0 = Infinity; let gx1 = -Infinity; let gz1 = -Infinity;

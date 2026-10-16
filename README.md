@@ -7,9 +7,9 @@ Underground, it switches to the cave or bunker you're in.
 ## Features
 
 - **Two modes: Explore and Guide.** *Explore* (the default) is spoiler-free: the map shows where you've been,
-  what you've found, and the locked doors you've come across, with a **To unlock** list of what they need
-  (Maintenance Card ← needs Shovel). Where something is stays hidden until you ask for it with a red
-  **Show location (spoiler)** button. *Guide* shows every location. Switch with the slider in the top bar
+  what you've found, everything in the places you've explored, and the locked doors you've come across, with
+  a **To unlock** list of what they need (Maintenance Card ← needs Shovel). Anywhere else, where something
+  is stays hidden until you ask for it with a red **Show location (spoiler)** button. *Guide* shows every location. Switch with the slider in the top bar
   (tap or slide it); going to Guide asks first, and coming back to Explore is one tap and changes nothing.
 - **Fog over what you haven't explored.** In Explore, mist covers the island except where you've been:
   about 50 m around you as you play, where you saved, what you changed in the world, your camps, the
@@ -22,6 +22,9 @@ Underground, it switches to the cave or bunker you're in.
   back where you haven't, in three sizes, with Undo. Caves and bunkers have fog of
   their own: in their view, the tunnels you haven't been through are misty or hidden, the banner says how
   much of that cave you've explored, and you can reset just that one. Walking over a cave doesn't count.
+  Where the fog is gone, the map shows what's there: every item, place and locked door in that part of
+  the island or that cave (on its floor), as not found yet, so walking past the Stun Gun puts it on the
+  map. Painting the fog back hides it again.
 - **Your history from your saves.** Items you carry that have only one spot on the map, the places the
   game itself marks as found, and your zip lines count as found or visited, so the map knows where you've
   been from the first start. The trail keeps your height: walking over a bunker isn't being inside it.
@@ -41,9 +44,14 @@ Underground, it switches to the cave or bunker you're in.
   Guide shows every place anyway.
 - **Cave and bunker view.** When you go underground, the island goes dark and the map shows that cave's
   tunnels and only the items inside it. The outlines are read from the game's own files and drawn as a
-  plan: each floor in its own colour, ramps and shafts in grey, walls, a 10 m grid, a scale bar and north.
-  Chips in the banner show one floor at a time (the others, and their items, fade); underground, the
-  floor you're on is picked for you.
+  plan: walls, a 10 m grid, a scale bar and north. Caves A, B, C, D, F and G come from the cave's real
+  floor (its collision mesh), so every tunnel is there and joined up, underwater passages included; what
+  you'd explored of them before carries over. A cave that just slopes or steps down is one floor;
+  only where one level lies over another (down a ladder, stairs or a rope, or a cave underneath) does each
+  floor get its own colour, with ramps and shafts in grey, and chips in the banner to show one floor at a
+  time (the others, and their items, fade). The map opens on all floors and stays there until you pick
+  one. Climbing ropes and the ladders down from bunker hatches are marked, read from the game's files,
+  and so are the ropes up the island's cliffs.
 - **Your camps.** Everything you've built, grouped by place, with a list of what's there.
 - **Parked vehicles.** Golf carts, Knight Vs and hang gliders at the spot where you left them. In Explore
   the map shows only the ones you've moved or come close to; Guide shows all of them. A glider you fold up

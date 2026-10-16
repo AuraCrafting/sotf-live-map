@@ -82,7 +82,8 @@
 
   // ---------- Explore and Guide ----------
   // Explore ("where have I been") shows what you know: what you found, what you chose to reveal (the red
-  // spoiler buttons), and locked spots you came across, so you can see what you need to get further.
+  // spoiler buttons), everything where you've cleared the fog, and locked spots you came across, so you can
+  // see what you need to get further.
   // Guide ("get me there") shows everything. Switching never changes your progress, only what's shown.
   const exploring = () => prefs.mode !== 'guide';
   const entranceLike = (l) => (l.c === 'cave' || l.c === 'bunker') && !l.g;
@@ -129,12 +130,15 @@
     return floor == null || Math.abs(p.h - floor) < 15;
   }
 
+  let uncovered = new Set(); // spots whose fog you've cleared (see "what's under the fog" below)
   function knows(l) {
-    return store.found.has(l.id) || store.revealed.has(l.id) || store.encountered.has(l.id)
+    return store.found.has(l.id) || store.revealed.has(l.id) || store.encountered.has(l.id) || uncovered.has(l.id)
       || store.target?.id === `loc:${l.id}` || !!l.parked?.moved || store.seen.has(l.id) || store.probable.has(l.id);
   }
+  // a locked spot you came across (or cleared the fog over): shows as a lock, not what's behind it
+  const lockSeen = (l) => store.encountered.has(l.id) || uncovered.has(l.id);
   // a locked spot you came across but haven't looked into: what's there stays hidden in Explore
-  const hiddenLock = (l) => exploring() && !!lockState(l) && store.encountered.has(l.id) && !store.revealed.has(l.id);
+  const hiddenLock = (l) => exploring() && !!lockState(l) && lockSeen(l) && !store.revealed.has(l.id);
   const nameOf = (l) => (hiddenLock(l) ? (lockState(l) === 'open' ? 'Unlocked spot' : 'Locked spot') : nice(l.t));
   function lockTitle(l) {
     if (lockState(l) === 'open') return 'Unlocked · you can open it now';
@@ -402,6 +406,7 @@
       if (visible && !on) locLayer.addLayer(m);
       else if (!visible && on) locLayer.removeLayer(m);
     }
+    drawClimbs();
   }
 
   map.on('moveend', () => { if (!spread) applyFilters(); }); // markers coming near the view
@@ -609,7 +614,6 @@
       meGlide.go({ x: pos.x, y: pos.y, h: pos.heading }, { live: pos.source === 'live' });
     }
     updateCave();
-    autoCaveFloor();
     noteEncounters();
     drawOthers();
     drawGuide();
@@ -621,6 +625,7 @@
   // Kept per world (progress.json), whatever the mode: it's where you have been.
   let encounterChecked = 0; // trail points already looked at
   const VEHICLE_SIGHT = 75;
+  const UNDER_SIGHT = 15; // like the cave fog: what you see around you underground
   function noteEncounters(extra = []) {
     const pos = store.position;
     if (!pos || (store.view && store.active && store.view !== store.active)) return;
@@ -636,6 +641,10 @@
     // surface, at about its height) or moved it; the in-game GPS lists all of them, so that alone doesn't count.
     const saw = LOCS.filter((l) => l.c === 'vehicle' && !store.seen.has(l.id) && pts.some((p) => !wasUnder(p)
       && Math.hypot(p.x - l.x, p.y - l.y) <= VEHICLE_SIGHT && (p.h == null || l.h == null || Math.abs(p.h - l.h) < 30)));
+    // Everything else shows once its fog is gone (see "what's under the fog"), but a few underground spots
+    // have no cave outline to keep fog for: those show once you've been near them down there.
+    saw.push(...LOCS.filter((l) => !AREA[l.a] && isUnderground(l) && !needsOf(l).length && !knows(l)
+      && pts.some((p) => Math.hypot(p.x - l.x, p.y - l.y) <= UNDER_SIGHT && sameLevel(p, l))));
     if (saw.length) {
       saw.forEach((l) => store.seen.add(l.id));
       persistMarks('seen', saw.map((l) => l.id));
@@ -919,6 +928,7 @@
   const fogLayer = new CanvasOverlay(fogCanvas, [[GRID.min, GRID.min], [fogEnd, fogEnd]], { pane: 'fog', interactive: false, className: 'fog-layer' });
   let fogBits = null; // the explored cells of the world on screen: bit j * 400 + i, lowest bit first
   let fogPainted = null;
+  let fogJoined = null; // fogBits with the gaps joined, as the fog shows them (null: work it out again)
   const bitsFrom = (b64) => Uint8Array.from(atob(b64 || ''), (ch) => ch.charCodeAt(0));
   const hasCell = (bits, k) => (bits[k >> 3] >> (k & 7)) & 1;
   const fogActive = () => !!prefs.fogOn?.[exploring() ? 'explore' : 'guide'] && prefs.fog > 0;
@@ -999,7 +1009,7 @@
   }
   function fogHolesFromBits() {
     const N = GRID.size;
-    const joined = joinedCells(fogBits);
+    const joined = (fogJoined = joinedCells(fogBits));
     const ctx = fogHoles.getContext('2d');
     const img = ctx.createImageData(N, N);
     for (let j = 0; j < N; j++) {
@@ -1042,9 +1052,11 @@
   function setFogWorld() {
     fogBits = store.explored.get(store.view) || null;
     fogPainted = null;
+    fogJoined = null;
     paintCave();
     drawFog();
     renderExploredStat();
+    updateUncovered();
   }
   function drawFog() {
     if (caveDrawn) { // in a cave: its own fog
@@ -1062,6 +1074,7 @@
     const bits = store.explored.get(world);
     if (!bits) return;
     for (const k of cells) bits[k >> 3] |= 1 << (k & 7);
+    if (world === store.view) fogChanged();
     if (world !== store.view || fogPainted !== bits) return renderExploredStat();
     repaintAround(cells);
   }
@@ -1217,7 +1230,7 @@
   };
   const CAVE_PAD = 3; // cells of room around the outline
   let caveDrawn = null; // { area, m, px, fogOn, seenCanvas, unseenCanvas, seen, unseen }
-  let caveFloor = { area: null, pick: 'all', manual: false }; // the floor filter: 'all', a floor's index, or 'ramps'
+  let caveFloor = { area: null, pick: 'all' }; // the floor filter: 'all', a floor's index, or 'ramps'
   const underBits = (id) => store.exploredUnder.get(store.view)?.get(id) || null;
   const pickOf = (area) => (area && caveFloor.area === area.id ? caveFloor.pick : 'all');
   const layerPick = (layer) => (layer.floor < 0 ? 'ramps' : layer.floor);
@@ -1304,32 +1317,18 @@
       + m.floors.map((f, i) => (drawn.has(i) ? chip(i, `Floor ${i + 1}`, FLOOR_COLORS[i], `At about ${Math.round(f.h)} m`) : '')).join('')
       + (drawn.has(-1) ? chip('ramps', 'Ramps and shafts', RAMP_COLOR) : '');
   }
-  function setCaveFloor(pick, manual) {
-    if (!cave) return;
-    if (caveFloor.area === cave.id && caveFloor.pick === pick) {
-      caveFloor.manual ||= manual;
-      return;
-    }
-    caveFloor = { area: cave.id, pick, manual };
+  // A cave or bunker opens on all its floors, and stays there: the map doesn't switch floors as you climb.
+  function setCaveFloor(pick) {
+    if (!cave || (caveFloor.area === cave.id && caveFloor.pick === pick)) return;
+    caveFloor = { area: cave.id, pick };
     renderFloorChips(cave);
     paintCave();
     for (const l of LOCS) if (l.a === cave.id) paintMarker(l.id);
   }
   $('#cave-floors').addEventListener('click', (e) => {
     const v = e.target.closest('[data-floor]')?.dataset.floor;
-    if (v != null) setCaveFloor(v === 'all' || v === 'ramps' ? v : Number(v), true);
+    if (v != null) setCaveFloor(v === 'all' || v === 'ramps' ? v : Number(v));
   });
-  // Underground and live: the floor you're on (the one nearest your height), until you pick one yourself.
-  function autoCaveFloor() {
-    const pos = store.position;
-    if (!cave || cave.manual || !pos || pos.source !== 'live' || pos.h == null) return;
-    if (caveFloor.area === cave.id && caveFloor.manual) return;
-    const m = caveMapOf(cave);
-    if (m.layers.length < 2 || !m.floors.length) return;
-    let best = 0;
-    m.floors.forEach((f, i) => { if (Math.abs(f.h - pos.h) < Math.abs(m.floors[best].h - pos.h)) best = i; });
-    setCaveFloor(best, false);
-  }
   // An item in a cave is on the floor of the outline cell nearest to it.
   const locFloor = new Map();
   function otherFloor(l) {
@@ -1392,9 +1391,99 @@
     if (!sets.has(id)) sets.set(id, new Uint8Array((area.cells.length + 7) >> 3));
     const bits = sets.get(id);
     for (const k of cells) bits[k >> 3] |= 1 << (k & 7);
+    if (world === store.view) uncoverSoon();
     if (world !== store.view || caveDrawn?.area.id !== id) return;
     paintCaveSoon();
     if (!fogMenu.hidden) renderFogMenu();
+  }
+
+  // ---------- what's under the fog (Explore) ----------
+  // Clearing the fog shows everything there, as not found yet (only what you carry counts as found). On the
+  // island a spot shows once its 10 m cell is clear, gaps the fog joins up included, so what looks clear is
+  // clear; underground, once an outline cell on its floor within 3 m of it is, in that cave's own fog.
+  // Walking over a cave doesn't uncover what's in it. The fog brush and a fog reset work the same way:
+  // paint the fog back and what's under it hides again. Locked spots show as locks (see "Explore and Guide").
+  const UNCOVER_REACH = 3;
+  const coverCells = new Map(); // loc id -> the outline cells around it on its floor, worked out once
+  function caveCellsAround(l) {
+    if (!coverCells.has(l.id)) {
+      const floor = floorHeight(l);
+      const out = [];
+      AREA[l.a].cells.forEach(([x, z, y], k) => {
+        if (Math.hypot(x - l.x, z - l.y) <= UNCOVER_REACH && (floor == null || Math.abs(y - floor) <= 6)) out.push(k);
+      });
+      coverCells.set(l.id, out);
+    }
+    return coverCells.get(l.id);
+  }
+  function clearAt(x, z) { // the island's fog is gone here
+    if (!fogBits) return false;
+    fogJoined ||= joinedCells(fogBits);
+    const i = Math.floor((x - GRID.min) / GRID.cell);
+    const j = Math.floor((z - GRID.min) / GRID.cell);
+    return i >= 0 && j >= 0 && i < GRID.size && j < GRID.size && !!fogJoined[j * GRID.size + i];
+  }
+  function isUncovered(l) {
+    if (isUnderground(l)) {
+      const bits = AREA[l.a] ? underBits(l.a) : null;
+      return !!bits && caveCellsAround(l).some((k) => hasCell(bits, k));
+    }
+    return clearAt(l.x, l.y);
+  }
+  let uncoverTimer = 0;
+  function updateUncovered() {
+    clearTimeout(uncoverTimer);
+    uncoverTimer = 0;
+    const next = new Set(LOCS.filter(isUncovered).map((l) => l.id));
+    const changed = [...next].filter((id) => !uncovered.has(id)).concat([...uncovered].filter((id) => !next.has(id)));
+    uncovered = next;
+    if (changed.length) refreshKnown(changed);
+    drawClimbs();
+  }
+  function uncoverSoon() { // cells come in as you walk: look again at most every half second
+    if (!uncoverTimer) uncoverTimer = setTimeout(updateUncovered, 500);
+  }
+  function fogChanged() { // the island cells of the world on screen changed
+    fogJoined = null;
+    uncoverSoon();
+  }
+
+  // ---------- climbing ropes and ladders ----------
+  // From the game's scene files (data/climbs.js): a cave's climbing ropes and a bunker's hatch ladder on its
+  // map, the ropes up the island's cliffs on the island. They show on every floor (they go between them), and
+  // in Explore once their fog is gone, like everything else: underground, any outline cell within 3 m of
+  // the rope, at any height, since you see a rope from the top or the bottom.
+  const CLIMBS = window.SOTF_CLIMBS || [];
+  const CLIMB_LOOK = {
+    rope: { name: 'Climbing rope', svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="4.5" r="2"/><path d="M12 6.5c-3 2.5 3 4 0 6.5s3 4 0 6.5V22"/></svg>' },
+    ladder: { name: 'Ladder', svg: '<svg viewBox="0 0 24 24"><path d="M7.5 2v20M16.5 2v20M7.5 6.5h9M7.5 12h9M7.5 17.5h9"/></svg>' },
+  };
+  const climbLayer = L.layerGroup().addTo(map);
+  const climbCells = new Map(); // climb -> the outline cells around it, worked out once
+  let climbsDrawn = null;
+  function climbShown(c) {
+    if ((c.a || null) !== (cave?.id || null)) return false; // a cave's on its map, the island's on the island
+    if (!exploring()) return true;
+    if (!c.a) return clearAt(c.x, c.y);
+    const bits = underBits(c.a);
+    if (!bits || !AREA[c.a]) return false;
+    if (!climbCells.has(c)) {
+      climbCells.set(c, AREA[c.a].cells.flatMap(([x, z], k) => (Math.hypot(x - c.x, z - c.y) <= UNCOVER_REACH ? [k] : [])));
+    }
+    return climbCells.get(c).some((k) => hasCell(bits, k));
+  }
+  function drawClimbs() {
+    const shown = CLIMBS.filter(climbShown);
+    const sig = shown.map((c) => CLIMBS.indexOf(c)).join(',');
+    if (sig === climbsDrawn) return;
+    climbsDrawn = sig;
+    climbLayer.clearLayers();
+    for (const c of shown) {
+      const look = CLIMB_LOOK[c.k];
+      const icon = L.divIcon({ className: `climb climb-${c.k}`, html: `<span class="pin-dot">${look.svg}</span>`, iconSize: [0, 0] });
+      const title = `${look.name} · the top is at about ${Math.round(c.h)} m`;
+      L.marker([c.y, c.x], { icon, title, alt: look.name, keyboard: false, zIndexOffset: 300 }).addTo(climbLayer);
+    }
   }
 
   // The game's AreaMask bits (Sons.Areas.AreaMask): caves A-H and the seven bunkers.
@@ -1458,7 +1547,7 @@
     } else {
       banner.hidden = true;
     }
-    if (!area || caveFloor.area !== area.id) caveFloor = { area: null, pick: 'all', manual: false };
+    if (!area || caveFloor.area !== area.id) caveFloor = { area: null, pick: 'all' };
     drawCaveCells(cave);
     renderCaveLegend();
     applyFilters();
@@ -2427,7 +2516,7 @@
   let unlockOpen = null;
   function renderUnlock() {
     const el = $('#unlock');
-    const seen = LOCKS.filter((l) => store.encountered.has(l.id) && !store.found.has(l.id));
+    const seen = LOCKS.filter((l) => lockSeen(l) && !store.found.has(l.id));
     if (!exploring() || !seen.length) { el.hidden = true; return; }
     const need = new Map(); // needed item -> the locks it's for
     for (const l of seen) for (const { id } of needsOf(l)) { if (!need.has(id)) need.set(id, []); need.get(id).push(l); }
@@ -2796,6 +2885,7 @@
       changed.push(k);
     }
     if (world === store.view && fogBits !== bits) { fogBits = bits; fogPainted = null; } // its first explored cells
+    if (world === store.view && changed.length) fogChanged();
     return changed;
   }
   function paintAt(latlng) {
@@ -3384,6 +3474,7 @@
       const m = JSON.parse(e.data);
       if (m.cells) return addExploredUnder(m.world, m.area, m.cells);
       underSets(m.world).set(m.area, bitsFrom(m.bits)); // a reset, or its undo
+      if (m.world === store.view) uncoverSoon();
       if (m.world === store.view && caveDrawn?.area.id === m.area) paintCave();
     });
     es.addEventListener('trailAdd', (e) => {

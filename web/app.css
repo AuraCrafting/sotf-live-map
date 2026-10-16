@@ -330,6 +330,14 @@ body.dark-map .sotf-tiles { filter: brightness(.5) saturate(.7) contrast(1.1); }
 }
 
 /* your camps (from your save) */
+.leaflet-marker-icon.climb { width: 0 !important; height: 0 !important; }
+/* a rope or ladder: a small badge up and to the right of its spot, so an item at the foot of it stays in view */
+.climb .pin-dot {
+  --c: #46525d; width: calc(var(--m) * .72); height: calc(var(--m) * .72);
+  border-radius: 6px; border-color: rgba(230, 236, 240, .8); transform: translate(-5%, -95%);
+}
+.climb .pin-dot svg { width: 70%; height: 70%; fill: none; stroke: #fff; stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
+.climb:hover .pin-dot { transform: translate(-5%, -95%) scale(1.18); }
 .camp-pin .pin-dot { --c: #b9773a; }
 .camp-pin .pin-dot svg { width: 62%; height: 62%; fill: none; stroke: #fff; stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
 
