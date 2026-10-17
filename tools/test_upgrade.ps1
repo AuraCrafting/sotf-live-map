@@ -429,7 +429,9 @@ try {
     Write-Host "`n20. Picking an item up, live, marks its spot found"
     Set-Content (Join-Path $App 'web\data\locations.js') -Encoding utf8 -Value @('// test data', 'window.SOTF_CATEGORIES = [];',
         ('window.SOTF_LOCATIONS = [{"id":9001,"c":"tool","t":"A tool","x":100,"y":100},{"id":9002,"c":"tool","t":"The same tool","x":300,"y":100},' +
-         '{"id":9003,"c":"tool","t":"A tool in the cave","x":-1490,"y":-1450,"g":["In a cave"],"a":"cave-t"}];'))
+         '{"id":9003,"c":"tool","t":"A tool in the cave","x":-1490,"y":-1450,"g":["In a cave"],"a":"cave-t"},' +
+         '{"id":9004,"c":"document","t":"Cult Pamphlet no.2","x":500,"y":100},{"id":9007,"c":"document","t":"Cult Pamphlet no.1","x":520,"y":100},' +
+         '{"id":9005,"c":"crate","t":"2x cloth","x":600,"y":100},{"id":9006,"c":"crate","t":"Grey crate","x":700,"y":100}];'))
     Set-Content (Join-Path $App 'web\data\items.js') -Encoding utf8 -Value @('// test data', 'window.SOTF_ITEMS = {"9001":501,"9002":501,"9003":502};')
     $data = Join-Path $T 'data20'
     Set-Json "$data\progress.json" '{"worlds":{"world-p":{"found":[],"pins":[]}},"seenSaves":[],"trail":[]}'
@@ -446,8 +448,18 @@ try {
     Check '... but on your floor' ((FoundP) -contains 9003)
     Got 300 10 100 $true @(, @(501, 1))
     Check '... and not on the island while you are underground' (-not ((FoundP) -contains 9002))
+    Got 502 10 100 $false @(, @(777, 1, 'Cult Pamphlet'))
+    Check 'a spot with no item id is found by name: the pamphlet you picked up, not one 20 m away' ((FoundP) -contains 9004 -and -not ((FoundP) -contains 9007))
+    Got 601 10 100 $false @(, @(778, 2, 'Cloth'))
+    Check '... and a pile of cloth when you take the cloth' ((FoundP) -contains 9005)
+    Got 701 10 100 $false @(, @(779, 1, 'Rope'))
+    Check 'a box is not marked for one thing picked up next to it' (-not ((FoundP) -contains 9006))
+    Got 700.5 10 100.5 $false @(, @(780, 1, 'Duct Tape'))
+    Check '... but when its loot arrives (two things at it within a minute)' ((FoundP) -contains 9006)
+    Got 100 10 300 $false @(, @(781, 1, 'Stick'))
+    Check '... and a stick picked up anywhere else marks nothing' ((FoundP).Count -eq 5)
     Stop-Map
-    Check '... and it is saved' (@((Read-Json "$data\progress.json").worlds.'world-p'.found).Count -eq 2)
+    Check '... and it is saved' (@((Read-Json "$data\progress.json").worlds.'world-p'.found).Count -eq 5)
     Remove-Item (Join-Path $App 'web\data\items.js')
 
     Write-Host "`n16b. An explored area from an earlier build is made again from history"

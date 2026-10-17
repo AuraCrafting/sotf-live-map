@@ -36,6 +36,7 @@
     <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(Il2Cpp)\UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(Il2Cpp)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppTheForest.Utils"><HintPath>$(Il2Cpp)\Il2CppTheForest.Utils.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppSons.Item"><HintPath>$(Il2Cpp)\Il2CppSons.Item.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 
 </Project>

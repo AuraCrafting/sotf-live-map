@@ -39,7 +39,11 @@ Underground, it switches to the cave or bunker you're in.
 - **Picked up, marked found.** When you pick something up in the game, its spot on the map is marked found
   right away, without saving first: the mod sees the item arrive in your inventory, and the map marks that
   item's spot within a few metres of you, on your level (in a cave, on your floor). In Explore and Guide.
-  Something with no spot that close (crafted, or out of a box at your base) marks nothing.
+  Spots without a game item id are matched by name: a pamphlet, a pile of cloth, "Bones, flares, ..." when
+  you take one of those things right there. A box or case is marked when you break it open and take what
+  was in it (two things arriving at it within a minute). Something with no spot that close (crafted, or out
+  of a box at your base) marks nothing. Places (camps, graves, points of interest) count as visited once
+  you're right at them: within 10 m (villages 20 m, lakes 30 m).
 - **Kelvin and Virginia.** Their live positions, with names. In Explore, Virginia shows once you've met her
   (she came close, or your save says she has come to see you).
 - **Co-op friends.** Other players are shown the same way as you, in their own colour and with their name.

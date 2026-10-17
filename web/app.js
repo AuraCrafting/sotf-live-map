@@ -12,9 +12,10 @@
     { label: 'Gear', group: 'Gear', skip: [] },
     { label: 'Collectibles', group: 'Collectibles', skip: [] },
   ];
-  // Places that count as "visited" once you have been within AUTO_RADIUS metres.
+  // Places that count as "visited" once you have been right at them: within AUTO_RADIUS metres of the marker
+  // (a village is big, and a lake's marker is in the middle of it; the rest you have to walk up to).
   const AUTO_MARK = new Set(['camp', 'village', 'poi', 'spawn', 'grave', 'water', 'cave', 'bunker']);
-  const AUTO_RADIUS = 30;
+  const AUTO_RADIUS = { village: 20, water: 30, other: 10 };
   const PIN_KINDS = {
     base: { label: 'Base', color: '#ff7b22', glyph: 'B' },
     stash: { label: 'Stash', color: '#c9a21a', glyph: 'S' },
@@ -1664,7 +1665,8 @@
       if (!AUTO_MARK.has(l.c) || store.found.has(l.id) || l.g || l.r?.length) continue;
       const entrance = l.c === 'cave' || l.c === 'bunker';
       const from = entrance ? pts : fresh;
-      if (from.some((p) => Math.hypot(p.x - l.x, p.y - l.y) <= AUTO_RADIUS && sameLevel(p, l))) hits.push(l.id);
+      const r = AUTO_RADIUS[l.c] ?? AUTO_RADIUS.other;
+      if (from.some((p) => Math.hypot(p.x - l.x, p.y - l.y) <= r && sameLevel(p, l))) hits.push(l.id);
     }
     const inside = new Set(cave && !cave.manual ? [cave.id] : []);
     for (const p of pts) {
@@ -1723,7 +1725,7 @@
   // past an item isn't taking it, so only what's in your inventory counts: taken when it's the only one of
   // its spots with a change, "probably found here" (the closest) when several have one. Items you don't carry
   // (and crates, which have no item to carry) are never marked from this. Places are left to autoMark (being
-  // within 30 m is a visit) and locked spots to the encounters. A glider counts like any item: you can carry one.
+  // being right at one is a visit) and locked spots to the encounters. A glider counts like any item: you can carry one.
   const CHANGED_NEAR = 5;
   function changedMatches(changed, carried) {
     const found = [];

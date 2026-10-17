@@ -4,6 +4,7 @@ using Il2Cpp;
 using Il2CppEndnight.Utilities;
 using Il2CppSons.Ai.Vail;
 using Il2CppSons.Gameplay.GPS;
+using Il2CppSons.Items.Core;
 using Il2CppTheForest.Utils;
 using UnityEngine;
 
@@ -238,8 +239,24 @@ internal sealed class WorldReader
             return;
         sb.Append(",\"got\":[");
         for (var k = 0; k < gained.Count; k++)
-            sb.Append(k > 0 ? "," : "").Append('[').Append(gained[k].id).Append(',').Append(gained[k].n).Append(']');
+        {
+            sb.Append(k > 0 ? "," : "").Append('[').Append(gained[k].id).Append(',').Append(gained[k].n);
+            if (NameOf(gained[k].id) is { Length: > 0 } name)
+                sb.Append(',').Append(Str(name)); // for map spots without an item id (a pamphlet, a pile of cloth)
+            sb.Append(']');
+        }
         sb.Append(']');
+    }
+
+    private readonly Dictionary<int, string> _names = new();
+
+    private string NameOf(int id)
+    {
+        if (_names.TryGetValue(id, out var name))
+            return name;
+        try { name = ItemDatabaseManager.ItemById(id)?.Name; }
+        catch (Exception) { name = null; }
+        return _names[id] = name;
     }
 
     // ---------- JSON helpers ----------

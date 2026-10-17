@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace LiveMap;
 
@@ -48,7 +49,7 @@ public sealed class MapServer
     private readonly HashSet<string> _exploredDirty = new();
     private readonly Dictionary<string, ExploredGrid> _exploredUndo = new(); // per world, until Undo or the next reset
     private Dictionary<long, Place> _places;                                 // the map's locations, for found ones
-    private readonly record struct Place(double X, double Y, bool Under, string Area, bool Entrance);
+    private readonly record struct Place(double X, double Y, bool Under, string Area, bool Entrance, string Title = null, string Category = null);
     // ... and inside caves and bunkers: the cells of each one's outline you've seen, per world (CellSet), in
     // progress.json as worlds.<uid>.explored.under = { "<area id>": bits }. Tunnels block the view, so less far.
     private const double SeeUnder = 15, UnderClimb = 6; // metres around you, and up or down (caves have floors)
@@ -768,7 +769,7 @@ public sealed class MapServer
                 var entrance = l["c"]?.ToString() is "cave" or "bunker" && l["g"] == null;
                 var under = tags.Any(t => t.Contains("cave", StringComparison.OrdinalIgnoreCase) || t.Contains("bunker", StringComparison.OrdinalIgnoreCase)
                     || t.Contains("underground", StringComparison.OrdinalIgnoreCase)) || (l["a"] != null && !entrance);
-                _places[(long)id] = new Place(x, y, under, l["a"]?.ToString(), entrance);
+                _places[(long)id] = new Place(x, y, under, l["a"]?.ToString(), entrance, l["t"]?.ToString(), l["c"]?.ToString());
                 if (l["c"]?.ToString() == "spawn" && l["t"]?.ToString() is { } title)
                     (_crashSites ??= new())[title.ToLowerInvariant()] = (x, y);
             }
@@ -1328,30 +1329,88 @@ public sealed class MapServer
         var ids = new List<long>();
         foreach (var entry in got.OfType<JsonArray>())
         {
-            if (entry.Count < 1 || !TryNum(entry[0], out var item) || !ItemSpots().TryGetValue((int)item, out var spots))
+            if (entry.Count < 1 || !TryNum(entry[0], out var item))
                 continue;
             long best = 0;
             var bestDistance = PickReach;
-            foreach (var id in spots)
+            foreach (var id in ItemSpots().TryGetValue((int)item, out var spots) ? spots : new List<long>())
             {
                 if (found.Contains(id) || ids.Contains(id) || !Places().TryGetValue(id, out var place) || place.Under != underground)
                     continue;
                 var d = Math.Sqrt((place.X - x) * (place.X - x) + (place.Y - z) * (place.Y - z));
-                if (d > bestDistance)
+                if (d > bestDistance || !SameFloor(place, h)) // underground: not another floor of the cave
                     continue;
-                if (place.Under && Areas().FirstOrDefault(a => a.Id == place.Area)?.FloorAt(place.X, place.Y) is { } floor && Math.Abs(floor - h) > PickClimb)
-                    continue; // another floor of the cave
                 best = id;
                 bestDistance = d;
             }
+            if (best == 0 && entry.Count > 2 && entry[2]?.ToString() is { Length: > 0 } name)
+                best = NearestNamed(name, x, z, h, underground, found, ids);
             if (best != 0)
                 ids.Add(best);
+        }
+        // a box broken or opened: its loot arrives while you stand at it
+        var now = Now();
+        var recent = _recentGains.TryGetValue(world, out var list) ? list : _recentGains[world] = new List<(double t, double x, double z, double h, bool under, int n)>();
+        recent.RemoveAll(g => now - g.t > BoxWindow);
+        recent.Add((now, x, z, h, underground, got.OfType<JsonArray>().Sum(e => e.Count > 1 && TryNum(e[1], out var n) ? Math.Max(1, (int)n) : 1)));
+        foreach (var (id, place) in Places())
+        {
+            if (place.Category != "crate" || found.Contains(id) || ids.Contains(id) || place.Under != underground
+                || Math.Sqrt((place.X - x) * (place.X - x) + (place.Y - z) * (place.Y - z)) > BoxReach || !SameFloor(place, h))
+                continue;
+            var items = recent.Where(g => g.under == place.Under && Math.Sqrt((place.X - g.x) * (place.X - g.x) + (place.Y - g.z) * (place.Y - g.z)) <= BoxReach).Sum(g => g.n);
+            if (items >= BoxLoot)
+                ids.Add(id);
         }
         if (ids.Count == 0)
             return;
         UpdateFound(new JsonObject { ["ids"] = new JsonArray(ids.Select(i => (JsonNode)i).ToArray()), ["found"] = true, ["world"] = world });
         Broadcast("pickedUp", new JsonObject { ["world"] = world, ["ids"] = new JsonArray(ids.Select(i => (JsonNode)i).ToArray()) });
     }
+
+    private const double NameReach = 4, BoxReach = 3, BoxWindow = 60;
+    private const int BoxLoot = 2; // items arriving at a box within BoxWindow seconds: you broke it open and took what was in it
+    private readonly Dictionary<string, List<(double t, double x, double z, double h, bool under, int n)>> _recentGains = new();
+    private static readonly Regex Words = new("[A-Z]?[a-z]+|[A-Z]+(?![a-z])");
+    private static readonly HashSet<string> NotNames = new() { "the", "and", "of", "item", "no", "x" };
+
+    private bool SameFloor(Place place, double h) =>
+        !place.Under || Areas().FirstOrDefault(a => a.Id == place.Area)?.FloorAt(place.X, place.Y) is not { } floor || Math.Abs(floor - h) <= PickClimb;
+
+    private static List<string> WordsOf(string s) =>
+        Words.Matches(s ?? "").Select(m => m.Value.ToLowerInvariant()).Where(w => w.Length > 1 && !NotNames.Contains(w)).ToList();
+
+    /// <summary>
+    /// A spot the map has no item id for (a pamphlet, a pile of cloth, a box of flares): the nearest one within
+    /// NameReach of you, on your level, not found yet, whose title names what you just got ("Cloth" in "2x cloth",
+    /// "Flare" in "Flare Case", "Cult Pamphlet" in "Cult Pamphlet no.2").
+    /// </summary>
+    private long NearestNamed(string itemName, double x, double z, double h, bool underground, HashSet<long> found, List<long> taken)
+    {
+        var name = WordsOf(itemName);
+        if (name.Count == 0)
+            return 0;
+        long best = 0;
+        var bestDistance = NameReach;
+        foreach (var (id, place) in Places())
+        {
+            if (found.Contains(id) || taken.Contains(id) || place.Under != underground || HasItemId(id) || place.Title == null)
+                continue;
+            var d = Math.Sqrt((place.X - x) * (place.X - x) + (place.Y - z) * (place.Y - z));
+            if (d > bestDistance || !SameFloor(place, h))
+                continue;
+            var title = WordsOf(place.Title);
+            if (!name.All(w => title.Any(t => t == w || t == w + "s" || t == w + "es" || t + "s" == w)))
+                continue;
+            best = id;
+            bestDistance = d;
+        }
+        return best;
+    }
+
+    private HashSet<long> _withItemId; // the map's spots that have an item id (data/items.js)
+
+    private bool HasItemId(long id) => (_withItemId ??= ItemSpots().Values.SelectMany(s => s).ToHashSet()).Contains(id);
 
     /// <summary>
     /// Live feed from the game mod: {x, y, z} game coordinates (y = height), heading in degrees,
