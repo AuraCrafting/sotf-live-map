@@ -71,7 +71,8 @@ Underground, it switches to the cave or bunker you're in.
   underground item shows its entrances.
 - **Your progress.** Mark things as found, drop your own pins, and see where you've been. Your PC and
   phone stay in sync. Click (or tap) the map to drop a pin: on a PC its type, **Place pin** and **Cancel**
-  sit right next to it (Enter places it, Esc cancels); on a phone they're in a small bar at the bottom.
+  sit right next to it (Enter places it, Esc or a right-click cancels); on a phone they're in a small bar at
+  the bottom.
 - **Your trail.** Show the last hour, today or everything, or reset it for one world (with Undo).
 - **Every world separately.** Single player and co-op worlds each keep their own found markers, pins,
   trail, camps and vehicles. The map shows the game you play, switching straight away when you load

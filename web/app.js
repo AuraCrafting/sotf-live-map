@@ -453,6 +453,7 @@
     }).addTo(map);
     marker.on('drag', renderDraft);
     marker.on('dblclick', (e) => { L.DomEvent.stopPropagation(e); placeDraft(); });
+    marker.on('contextmenu', (e) => { L.DomEvent.stopPropagation(e); if (canHover) endDraft(); }); // right-click on it: cancel
     draft = { marker, kind: 'note' };
     const verb = canHover ? 'Click' : 'Tap';
     $('#draft-hint').classList.toggle('repeat', !!prefs.pinHintSeen);
@@ -3006,7 +3007,13 @@
     pendingDraft = setTimeout(() => startDraft(e.latlng), 260);
   });
   map.on('dblclick', () => clearTimeout(pendingDraft));
-  map.on('contextmenu', (e) => { clearTimeout(pendingDraft); if (!brush) startDraft(e.latlng); });
+  // A right-click drops a pin, or cancels the one you're placing (a misclick); a long-press on a phone moves it.
+  map.on('contextmenu', (e) => {
+    clearTimeout(pendingDraft);
+    if (brush) return;
+    if (draft && canHover) return endDraft();
+    startDraft(e.latlng);
+  });
 
   const readout = $('#readout');
   map.on('mousemove', (e) => {
