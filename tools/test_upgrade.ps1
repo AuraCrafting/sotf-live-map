@@ -462,6 +462,25 @@ try {
     Check '... and it is saved' (@((Read-Json "$data\progress.json").worlds.'world-p'.found).Count -eq 5)
     Remove-Item (Join-Path $App 'web\data\items.js')
 
+    Write-Host "`n20b. A tent you pack up takes its camp off the map"
+    function Pieces([double]$x, [double]$z, [int]$n) { @(1..$n | ForEach-Object { @{ Position = @{ x = $x + $_; y = 10; z = $z } } }) }
+    $ts = Join-Path $T 'saves20b'
+    New-Save $ts '3000000010' 'world-t' 0 0 '2026-01-13T10:00:00+00:00' @{
+        # a tent where you saved, a tent-sized camp further off, and a base
+        'ConstructionsSaveData.json' = Wrap 'Constructions' @{ Structures = @(, @((Pieces 200 200 3) + (Pieces 600 600 3) + (Pieces 400 400 12))) }
+    }
+    $s = Start-Map (Join-Path $T 'data20b') $ts
+    function CampsT { @((World (Invoke-RestMethod "$Base/api/state") 'world-t').camps) }
+    Check 'the save has the three camps' ((CampsT).Count -eq 3)
+    function GotT([double]$x, [double]$z, $items) { Post '/api/position' @{ x = $x; y = 10; z = $z; heading = 0; cave = $false; area = 0; world = 'world-t'; got = $items } | Out-Null }
+    GotT 203 201 @(, @(783, 1, 'Stick'))
+    Check 'something else picked up at a tent leaves it' ((CampsT).Count -eq 3)
+    GotT 203 201 @(, @(782, 1, 'Tent'))
+    Check 'the tent you pack up is gone, the other camps stay' ((CampsT).Count -eq 2 -and -not ((CampsT) | Where-Object { [Math]::Abs($_.x - 202) -lt 5 }))
+    GotT 406 401 @(, @(782, 1, 'Tent'))
+    Check '... and a base never goes' ((CampsT).Count -eq 2)
+    Stop-Map
+
     Write-Host "`n16b. An explored area from an earlier build is made again from history"
     $data = Join-Path $T 'data16b'
     $zeros = [Convert]::ToBase64String((New-Object byte[] 20000))

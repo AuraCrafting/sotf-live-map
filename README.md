@@ -8,7 +8,8 @@ Underground, it switches to the cave or bunker you're in.
 
 - **Two modes: Explore and Guide.** *Explore* (the default) is spoiler-free: the map shows where you've been,
   what you've found, everything in the places you've explored, and the locked doors you've come across, with
-  a **To unlock** list of what they need (Maintenance Card ← needs Shovel). Anywhere else, where something
+  a **To unlock** list of what they need (Maintenance Card ← needs Shovel). Once you have what one needs,
+  it shows what's behind it, ringed as unlocked. Anywhere else, where something
   is stays hidden until you ask for it with a red **Show location (spoiler)** button. *Guide* shows every location. Switch with the slider in the top bar
   (tap or slide it); going to Guide asks first, and coming back to Explore is one tap and changes nothing.
 - **Fog over what you haven't explored.** In Explore, mist covers the island except where you've been:
@@ -60,7 +61,8 @@ Underground, it switches to the cave or bunker you're in.
   time (the others, and their items, fade). The map opens on all floors and stays there until you pick
   one. Climbing ropes and the ladders down from bunker hatches are marked, read from the game's files,
   and so are the ropes up the island's cliffs.
-- **Your camps.** Everything you've built, grouped by place, with a list of what's there.
+- **Your camps.** Everything you've built, grouped by place, with a list of what's there. A tent you pack
+  up goes off the map right away; where you put it up again shows after you save.
 - **Parked vehicles.** Golf carts, Knight Vs and hang gliders at the spot where you left them. In Explore
   the map shows only the ones you've moved or come close to; Guide shows all of them. A glider you fold up
   and put down somewhere else shows as **Your glider** where you left it (after you save), with Guide me

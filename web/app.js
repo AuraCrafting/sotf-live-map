@@ -139,8 +139,9 @@
   // a locked spot you came across (or cleared the fog over): shows as a lock, not what's behind it
   const lockSeen = (l) => store.encountered.has(l.id) || uncovered.has(l.id);
   // a locked spot you came across but haven't looked into: what's there stays hidden in Explore
-  const hiddenLock = (l) => exploring() && !!lockState(l) && lockSeen(l) && !store.revealed.has(l.id);
-  const nameOf = (l) => (hiddenLock(l) ? (lockState(l) === 'open' ? 'Unlocked spot' : 'Locked spot') : nice(l.t));
+  // Once you have what it needs it's no longer locked: it shows what it is, ringed as unlocked
+  const hiddenLock = (l) => exploring() && lockState(l) === 'locked' && lockSeen(l) && !store.revealed.has(l.id);
+  const nameOf = (l) => (hiddenLock(l) ? 'Locked spot' : nice(l.t));
   function lockTitle(l) {
     if (lockState(l) === 'open') return 'Unlocked · you can open it now';
     return `Locked · needs ${needsOf(l).filter((n) => !store.found.has(n.id)).map((n) => nice(n.t)).join(' and ')}`;

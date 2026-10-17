@@ -1362,10 +1362,34 @@ public sealed class MapServer
             if (items >= BoxLoot)
                 ids.Add(id);
         }
+        PackedUp(world, x, z, got);
         if (ids.Count == 0)
             return;
         UpdateFound(new JsonObject { ["ids"] = new JsonArray(ids.Select(i => (JsonNode)i).ToArray()), ["found"] = true, ["world"] = world });
         Broadcast("pickedUp", new JsonObject { ["world"] = world, ["ids"] = new JsonArray(ids.Select(i => (JsonNode)i).ToArray()) });
+    }
+
+    private const double TentReach = 8;
+    private const int TentPieces = 6; // a camp this small, with nothing named in it, is a tent you put up (to save)
+
+    /// <summary>
+    /// A tent you packed up (it came back into your inventory where you stand): its camp marker goes now,
+    /// not at your next save. Only a camp of a few unnamed pieces counts; a base never does.
+    /// </summary>
+    private void PackedUp(string world, double x, double z, JsonArray got)
+    {
+        if (!got.OfType<JsonArray>().Any(e => e.Count > 2 && WordsOf(e[2]?.ToString()).Contains("tent")))
+            return;
+        if (_saveList.LastOrDefault(s => s.World == world && s.HasWorldData) is not { } withData)
+            return;
+        var gone = withData.Camps.OfType<JsonObject>().Where(c => TryNum(c["x"], out var cx) && TryNum(c["y"], out var cz)
+            && Math.Sqrt((cx - x) * (cx - x) + (cz - z) * (cz - z)) <= TentReach
+            && TryNum(c["pieces"], out var n) && n <= TentPieces && (c["items"] as JsonArray)?.Count is null or 0).ToList();
+        if (gone.Count == 0)
+            return;
+        foreach (var c in gone)
+            withData.Camps.Remove(c);
+        UpdateActive(force: true); // the pages get the camps again
     }
 
     private const double NameReach = 4, BoxReach = 3, BoxWindow = 60;
